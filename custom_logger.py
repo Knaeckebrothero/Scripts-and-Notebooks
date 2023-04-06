@@ -1,8 +1,3 @@
-"""
-This is a custom logger for python projects.
-https://docs.python.org/3/library/logging.html?highlight=logger#module-logging
-"""
-
 import logging
 
 
@@ -42,8 +37,5 @@ def configure_custom_logger(
     console_handler.setFormatter(formatter)
     console_handler.setLevel(console_level)
     logger.addHandler(console_handler)
-
-    print(f"File handler log level: {file_handler.level}")
-    print(f"Console handler log level: {console_handler.level}")
 
     return logger
