@@ -4,9 +4,8 @@ from the following video game analysis page:
 
 https://u.gg/lol/champion-leaderboards/fiddlesticks?region=na1
 """
-import time
-from selenium import webdriver
-from selenium.webdriver.common.by import By
+import requests
+from bs4 import BeautifulSoup
 
 # Get champion name
 #champ = input('Please enter a champion name: ')
@@ -14,17 +13,21 @@ champ = 'leesin'
 servers = ['na', 'euw', 'eune', 'kr', 'jp',
            'br', 'oce', 'tr', 'lan', 'las', 'ru']
 
-# Initialize the WebDriver and load login page.
-driver = webdriver.Chrome()
-
 # Get players from op.gg and loop through each server
 for server in servers:
     summoner_names = []
 
     # Load page
-    driver.get(
-        f'https://u.gg/lol/champion-leaderboards/{champ}?region={server}')
-    time.sleep(3)
+    response = requests.get(
+        f'https://u.gg/lol/champion-leaderboards/{champ}?region={server}').text
+
+    soup = BeautifulSoup(response, 'html.parser')
+
+    # Check if the request was successful
+    if response.status_code == 200:
+        html_content = response.text
+    else:
+        print(f"Error: {response.status_code}")
 
     # Get top three players
     elements = driver.find_elements(
