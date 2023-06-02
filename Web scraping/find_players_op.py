@@ -3,6 +3,7 @@ This script aims to find and retrieve player names,
 from the following video game analysis page:
 
 https://www.op.gg/leaderboards/champions/fiddlesticks?region=na
+https://www.op.gg/robots.txt
 """
 import time
 from selenium import webdriver
