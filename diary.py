@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 from datetime import datetime
@@ -37,9 +38,10 @@ if st.button('Save Diary'):
         'Notes': [notes]
     }
 
-    # create DataFrame
+    # Create DataFrame
     df = pd.DataFrame(diary_data)
 
-    # append DataFrame to CSV, without the header if the file already exists
-    with open('diary.csv', 'a') as f:
+    # Append DataFrame to CSV, without the header if the file already exists
+    dir_path = os.path.dirname(os.path.realpath(__file__))
+    with open(os.path.join(dir_path, 'diary.csv'), 'a') as f:
         df.to_csv(f, header=f.tell() == 0, index=False)
