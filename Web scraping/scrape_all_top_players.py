@@ -33,10 +33,10 @@ def get_players(champ, servers, link):
         # Get the player objects
         elements = driver.find_elements(by=By.CLASS_NAME, value='summoner-name')
 
-        # Extract the summonernames and add them to the list
+        # Extract the names and add them to the list
         summoner_names.extend(elem.text for elem in elements if elem.text)
 
-        # Add the summoner names to the player matrix
+        # Add the names to the player matrix
         player_matrix.append(summoner_names)
 
     driver.quit()
@@ -69,6 +69,16 @@ u_players = get_players(
 players = merge_players(op_players, u_players)
 
 # Write the players to a csv file
+with open(f'{champ_name}_players.csv',
+          'w', newline='', encoding='utf-8') as csvfile:
+    writer = csv.writer(csvfile)
+    writer.writerow(["Champion", "Server", "Player_Name"])
+    for i, server in enumerate(op_servers):
+        for name in players[i]:
+            writer.writerow([champ_name, server, name])
+
+"""
+# Write the players to a csv file
 i = 0
 for server in players:
     with open(f'{champ_name}_{op_servers[i]}_players.csv',
@@ -77,3 +87,4 @@ for server in players:
         for name in server:
             writer.writerow([name])
     i += 1
+"""
