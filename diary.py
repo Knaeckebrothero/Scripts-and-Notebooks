@@ -3,14 +3,32 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime
 
-# Title
-st.title('{} Diary'.format(datetime.today().strftime('%d.%m.%Y')))
+# Set config to always start with wide layout
+st.set_page_config(layout="wide")
 
-# Sliders for rating the day
-st.header('Please rate your day on a scale of 1 to 10')
-overall_rating = st.slider('Overall aspect:', 1, 10, 5, key='1')
-emotional_rating = st.slider('Emotional aspect:', 1, 10, 5, key='2')
-mental_rating = st.slider('Mental aspect:', 1, 10, 5, key='3')
+# Main title
+st.title('Welcome to your digital diary!')
+
+# Select date for diary entry
+today = st.text_input(
+    'If you want to change the date please do so, if not simply continue...',
+    value=datetime.today().strftime('%d.%m.%Y'),
+    max_chars=None, key=None, type='default')
+
+# Start of by rating the day on a scale from 1 to 10
+st.header('How would you rate your day in terms of the following?')
+
+# Overall rating
+overall_rating = st.slider('Overall:', 1, 10, 5, key='or')
+overall_notes = st.text_area('Add notes as needed.', max_chars=200, key='on')
+
+# Emotional rating
+emotional_rating = st.slider('Emotional:', 1, 10, 5, key='er')
+emotional_notes = st.text_area('Add notes as needed.', max_chars=200, key='en')
+
+# Mental rating
+mental_rating = st.slider('Mental:', 1, 10, 5, key='mr')
+mental_notes = st.text_area('Add notes as needed.', max_chars=200, key='mn')
 
 # Number of activities
 st.header('Please state the number of hours you spent on the following activities.')
