@@ -1,7 +1,8 @@
-# Development related test or config files
+# Development related test or config files from development folder
 development/*
-.development.yaml
-development/config.yaml
+
+# Yaml config files
+*.yaml
 
 # Pycharm IDE stuff
 .idea
