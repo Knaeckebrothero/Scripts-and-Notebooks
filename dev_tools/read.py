@@ -3,10 +3,11 @@ This module contains functions used for loading test data.
 """
 
 import yaml
+import json
 
 
 # Retrieve values
-def credentials(key: str | list, path: str = './development/config.yaml') -> str | list[str]:
+def credentials(key: str | list, path: str = './config.yaml') -> str | list[str]:
     """
     This function retrieves data from a yaml file.
 
@@ -30,7 +31,7 @@ def credentials(key: str | list, path: str = './development/config.yaml') -> str
 
 
 # Retrieve a list from a yaml file.
-def data(keys: list[str],  path: str = './development/data.yaml') -> tuple:
+def data(keys: list[str], path: str = './data.yaml') -> tuple:
     """
     This function retrieves testdata from a yaml file.
     It takes a list of keys and returns a tuple of values.
@@ -50,3 +51,35 @@ def data(keys: list[str],  path: str = './development/data.yaml') -> tuple:
         for k in keys:
             result = result + (yaml_data[k],)
     return result
+
+
+# Retrieve a text from a .txt file.
+def text_data(path: str = './content.txt') -> str:
+    """
+    This function reads data from a text file.
+
+    Args:
+        path (str): Path to the text file.
+
+    Returns:
+        text (str): Text content of the file.
+    """
+    with open(path, 'r') as file:
+        text_contents = file.read()
+    return text_contents
+
+
+# Retrieve a dictionary from a .json file.
+def json_data(path: str) -> dict:
+    """
+    This function reads data from a JSON file.
+
+    Args:
+        path (str): Path to the JSON file.
+
+    Returns:
+        data (dict): Data content of the file.
+    """
+    with open(path, 'r') as file:
+        json_contents = json.load(file)
+    return json_contents
