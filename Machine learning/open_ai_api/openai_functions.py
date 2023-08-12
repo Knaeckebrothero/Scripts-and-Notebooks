@@ -1,4 +1,6 @@
+import os
 import openai
+from dotenv import load_dotenv
 from dev_tools import read as rd
 
 
@@ -13,7 +15,8 @@ def call_function(content, description):
     return api_call
 
 
-openai.api_key = rd.credentials('open_ai_key')
+load_dotenv()
+openai.api_key = os.getenv('OPENAI_KEY')
 
 response = call_function(rd.text_data('content.txt'), rd.json_data('task.json'))
 print(response)

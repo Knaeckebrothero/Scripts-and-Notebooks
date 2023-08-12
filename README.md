@@ -1,6 +1,6 @@
-# Project Title
+# Scripts & Notebooks
 
-One Paragraph of project description goes here. Explain what the project is about, what it does, and the value it provides to users.
+This repository contains a collection of scripts and notebooks. It mainly serves as a playground for testing out new stuff.
 
 ## Table of Contents
 
