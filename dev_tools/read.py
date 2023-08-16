@@ -64,7 +64,7 @@ def text_data(path: str = './content.txt') -> str:
     Returns:
         text (str): Text content of the file.
     """
-    with open(path, 'r') as file:
+    with open(path, 'r', encoding='utf-8') as file:
         text_contents = file.read()
     return text_contents
 

@@ -1,0 +1,50 @@
+{
+  "name": "extract_recipe_details",
+  "description": "Extract key information from a recipe and format it into a JSON object with specific attributes: title, portions, kcal, main_ingredients, spices, extras, preparation_time, preparation_steps, cooking_steps, serving_steps.",
+  "parameters": {
+    "type": "object",
+    "properties": {
+      "title": {
+        "type": "string",
+        "description": "The title of the recipe"
+      },
+      "portions": {
+        "type": "integer",
+        "description": "Number of portions"
+      },
+      "kcal": {
+        "type": "integer",
+        "description": "Calories per portion"
+      },
+      "main_ingredients": {
+        "type": "array",
+        "description": "List of main ingredients"
+      },
+      "spices": {
+        "type": "array",
+        "description": "List of spices"
+      },
+      "extras": {
+        "type": "array",
+        "description": "List of extra ingredients"
+      },
+      "preparation_time": {
+        "type": "integer",
+        "description": "Total preparation time in minutes"
+      },
+      "preparation_steps": {
+        "type": "array",
+        "description": "List of preparation steps"
+      },
+      "cooking_steps": {
+        "type": "array",
+        "description": "List of cooking steps"
+      },
+      "serving_steps": {
+        "type": "array",
+        "description": "List of serving steps"
+      }
+    },
+    "required": ["title", "portions", "kcal", "main_ingredients", "spices", "extras", "preparation_time", "preparation_steps", "cooking_steps", "serving_steps"]
+  }
+}
