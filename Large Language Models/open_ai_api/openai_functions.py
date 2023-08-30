@@ -16,7 +16,7 @@ def call_function(content, description):
 
 
 load_dotenv()
-openai.api_key = os.getenv('OPENAI_KEY')
+openai.api_key = os.getenv('OPENAI_API_KEY')
 
 response = call_function(rd.text_data('content.txt'), rd.json_data('task.json'))
 print(response)
