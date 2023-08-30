@@ -6,7 +6,7 @@ from dev_tools import read as rd
 from docx import Document
 
 
-# Template for the recipes
+# Template for the manual_formatter
 def create_recipe(title, portions, kcal, main_ingredients, spices, extras,
                   preparation_time, preparation_steps, cooking_steps, serving_steps
                   ) -> Document():
@@ -91,7 +91,7 @@ load_dotenv()
 openai.api_key = os.getenv('OPENAI_KEY')
 
 # Make the API call
-response = function_call(rd.text_data('recipe.txt'), rd.text_data('recipe_description.txt'))
+response = function_call(rd.text_data('../recipe.txt'), rd.text_data('recipe_description.txt'))
 
 # Extract the details from the API response
 recipe_details = json.loads(response['choices'][0]['message']['content'])
