@@ -1,0 +1,18 @@
+on:
+  pull_request:
+    types: [opened, synchronize, reopened] #Options: opened, synchronize, reopened, closed
+    branches: [ "development", "feature/*" ]
+jobs:
+  build:
+    runs-on: ${{matrix.Betriebsysteme}}
+    strategy:
+      matrix:
+        Betriebsysteme: [ubuntu-latest, windows-latest, macOS-latest]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Java version
+        uses: actions/setup-java@v3
+        with:
+          java-version: '11'
+      - name: Build with Maven
+        run: mvn clean install
