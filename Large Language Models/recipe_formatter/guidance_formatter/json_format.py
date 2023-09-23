@@ -1,7 +1,7 @@
 recipe = guidance("""
 {{#system~}}
 You are a helpful assistant that specializes in extracting
-and information from a recipe and formatting it into a JSON object with the following structure:
+information from a recipe and formatting it into a JSON object with the following structure:
 
 ```json
 {
