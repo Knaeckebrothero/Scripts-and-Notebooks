@@ -1,9 +1,4 @@
 #!/bin/bash
-#Léon Enrique Diez Helfrich und Niklas Riel
-#
-#Studiengang: IBIS/EBIS
-#Modul: BSRN
-#Dozent: Prof. Dr. Christian Baun
 
 #Funktion um die Nullen, falls sie nötig sind, an die ProzessNummer zu hängen um die benötigte Länge von 5 zu erreichen
 function neueProzessNummer(){
