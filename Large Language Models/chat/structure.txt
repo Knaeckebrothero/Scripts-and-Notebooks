@@ -1,0 +1,16 @@
+{{#system~}}
+{{system_prompt}}
+{{~/system}}
+
+{{#assistant~}}
+Here are some information about the users assistant and their relationship:
+{{relationship}}
+{{~/assistant}}
+
+{{#user~}}
+{{prompt}}
+{{~/user}}
+
+{{#assistant~}}
+{{gen 'answer' temperature=0.5 max_tokens=256}}
+{{~/assistant}}
