@@ -1,10 +1,39 @@
-.left {
-    text-align: left;
-    background-color: #33b18b;
+.chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 93.7vh; // 100% of the viewport height
+}
+
+.chat-window {
+  app-message {
+    display: block;
+    clear: both;
   }
-  
-  .right {
-    text-align: right;
-    background-color: #aec720;
+
+  flex-grow: 1;
+  max-height: 850px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-radius: 5px;
+  padding: 15px;
+}
+
+.input-container {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  bottom: 0;
+  background-color: #a900f8;
+  padding: 10px;
+
+  mat-form-field {
+    flex-grow: 1; // takes up available space
+    margin-right: 15px;
+    margin-left: 15px;
   }
-  
+
+  button {
+    // style your button here, if needed
+  }
+}

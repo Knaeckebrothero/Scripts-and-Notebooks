@@ -2,7 +2,9 @@ import { Component } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 
 interface ChatResponse {
-  content: string;
+  text: string,
+  isUser: boolean,
+  time: Date
 }
 
 @Component({
@@ -13,26 +15,29 @@ interface ChatResponse {
 
 export class ChatComponent {
   constructor(private http: HttpClient) { }
-  response: ChatResponse | null = null;
   newMessage: string = '';
-  messages = [
-    { content: 'Test, left', alignment: 'left' },
-    { content: 'Test, right', alignment: 'right' }
+  //messages: ChatResponse [] = [];
+  messages: ChatResponse [] = [
+    {text: 'Hello, how can I help you?', isUser: true, time: new Date()},
+    {text: 'I need help with my account', isUser: false, time: new Date()},
+    {text: 'Ok, I can help you with that', isUser: true, time: new Date()},
+    {text: 'I need help with my account', isUser: false, time: new Date()},
   ];
 
   sendMessage() {
-    const payload = { content: this.newMessage };
+    const currentTime = new Date();
+    const payload = { text: this.newMessage, isUser: true, time: currentTime };
+
     this.http.post<ChatResponse>('http://127.0.0.1:8000/api/chat', payload).subscribe({
       next: (response) => {
-        this.messages.push({ content: response.content, alignment: 'left' });
+        this.messages.push({ text: response.text, isUser: false, time: new Date(response.time) });
       },
       error: (error) => {
         console.error('There was an error!', error);
-        // Handle the error as you see fit
       }
     });
     
-    this.messages.push({ content: this.newMessage, alignment: 'right' });
-    this.newMessage = '';  // Clear the input field
+    this.messages.push(payload);
+    this.newMessage = '';
   }
 }

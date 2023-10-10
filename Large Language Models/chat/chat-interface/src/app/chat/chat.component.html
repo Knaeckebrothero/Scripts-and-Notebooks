@@ -1,17 +1,12 @@
 <div class="chat-container">
-    <div class="messages-container">
-        <div class="messages">
-          <div *ngFor="let message of messages" class="message" [class.left]="message.alignment === 'left'" [class.right]="message.alignment === 'right'">
-            <p>{{message.content}}</p>
-          </div>          
-        </div>          
-    </div>
-    <div class="input-container">
-        <mat-form-field>
-            <mat-label>Type your message</mat-label>
-            <input matInput [(ngModel)]="newMessage" placeholder="Type your message...">
-          </mat-form-field>          
-          <button mat-raised-button color="primary" (click)="sendMessage()">Send</button>
-    </div>
+  <div class="chat-window">
+    <app-message *ngFor="let message of messages" [message]="message"></app-message>
+  </div>  
+  <div class="input-container">
+    <mat-form-field>
+      <mat-label>Type your message</mat-label>
+      <input matInput [(ngModel)]="newMessage" placeholder="Type your message...">
+    </mat-form-field>          
+    <button mat-raised-button color="primary" (click)="sendMessage()">Send</button>
   </div>
-  
+</div>

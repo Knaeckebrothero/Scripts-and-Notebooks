@@ -1,6 +1,7 @@
 import guidance
-from dotenv import load_dotenv, find_dotenv
+from datetime import datetime
 from fastapi import FastAPI
+from dotenv import load_dotenv, find_dotenv
 from fastapi.middleware.cors import CORSMiddleware
 
 
@@ -20,6 +21,17 @@ def text_data(path: str = './content.txt') -> str:
     return text_contents
 
 
+def package(text: str, is_user: bool = False, time: datetime = datetime.now()) -> dict:
+    return {'text': text, 'isUser': is_user, 'time': int(time.timestamp())}
+
+
+def generate(generate_prompt: str, generate_template: guidance.Program) -> str:
+    return generate_template(
+        system_prompt="You are a helpful digital assistant.",
+        relationship="This is the first time the user meets with his new assistant.",
+        prompt=generate_prompt)
+
+
 app = FastAPI()
 
 # CORS settings
@@ -37,18 +49,13 @@ app.add_middleware(
 )
 
 
-def generate(generate_prompt: str, generate_template: guidance.Program) -> str:
-    return generate_template(
-        system_prompt="You are a helpful digital assistant.",
-        relationship="This is the first time the user meets with his new assistant.",
-        prompt=generate_prompt)
-
-
 @app.post("/api/chat/")
-async def read_chat(content: dict):
+async def read_chat(message: dict):
     # Generate a response
-    answer = {"content": generate(content['content'], template).variables().get('answer')}
-    return answer
+    answer = generate(message['text'], template).variables().get('answer')
+
+    # Package and return the response
+    return package(answer)
 
 
 # Load API key
