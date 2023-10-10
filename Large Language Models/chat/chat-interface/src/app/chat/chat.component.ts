@@ -22,7 +22,7 @@ export class ChatComponent {
 
   sendMessage() {
     const payload = { content: this.newMessage };
-    this.http.post<ChatResponse>('/api/chat', payload).subscribe({
+    this.http.post<ChatResponse>('http://127.0.0.1:8000/api/chat', payload).subscribe({
       next: (response) => {
         this.messages.push({ content: response.content, alignment: 'left' });
       },
