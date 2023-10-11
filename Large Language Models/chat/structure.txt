@@ -3,8 +3,7 @@
 {{~/system}}
 
 {{#assistant~}}
-Here are some information about the users assistant and their relationship:
-{{relationship}}
+{{assistant_prompt}}
 {{~/assistant}}
 
 {{#user~}}

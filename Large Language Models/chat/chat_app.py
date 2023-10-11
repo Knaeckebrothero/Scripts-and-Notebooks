@@ -1,4 +1,5 @@
 import guidance
+from tinydb import TinyDB
 from datetime import datetime
 from fastapi import FastAPI
 from dotenv import load_dotenv, find_dotenv
@@ -60,6 +61,8 @@ async def read_chat(message: dict):
 
 # Load API key
 load_dotenv(find_dotenv())
+
+db = TinyDB(memory=True)
 
 # Set default language model & template
 llm_model = guidance.llms.OpenAI("gpt-3.5-turbo")  # "gpt-4" "gpt-3.5-turbo"
