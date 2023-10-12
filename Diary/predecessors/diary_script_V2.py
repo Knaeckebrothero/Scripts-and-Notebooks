@@ -131,7 +131,7 @@ with rate:
         options=['productive', 'relaxed', 'stressful', 'fun',
                  'friends', 'colleagues', 'family', 'partner',
                  'happy', 'sad', 'excited', 'tired', 'depressed',
-                 'junk-food', 'thc', 'insomnia', 'dispute',
+                 'junk-food', 'drugs', 'insomnia', 'dispute',
                  'hot', 'cold', 'rainy'], key='tags')
 
 with write:
