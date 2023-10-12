@@ -17,12 +17,7 @@ export class ChatComponent {
   constructor(private http: HttpClient) { }
   newMessage: string = '';
   //messages: ChatResponse [] = [];
-  messages: ChatResponse [] = [
-    {text: 'Hello, how can I help you?', isUser: true, time: new Date()},
-    {text: 'I need help with my account', isUser: false, time: new Date()},
-    {text: 'Ok, I can help you with that', isUser: true, time: new Date()},
-    {text: 'I need help with my account', isUser: false, time: new Date()},
-  ];
+  messages: ChatResponse [] = [];
 
   sendMessage() {
     const currentTime = new Date();
