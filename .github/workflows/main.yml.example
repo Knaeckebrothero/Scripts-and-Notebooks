@@ -1,9 +1,9 @@
 on:
   push:
-    branches: [ "main", "*", "*/*" ]
+    branches: [ "main", "develop", "feature/*" ]
   pull_request:
     types: [opened, synchronize, reopened]
-    branches: [ "main", "*", "*/*" ]
+    branches: [ "main", "develop", "feature/*" ]
 
 permissions:
   contents: read
@@ -13,7 +13,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Build
       run: |
         echo "Add your build steps here"
