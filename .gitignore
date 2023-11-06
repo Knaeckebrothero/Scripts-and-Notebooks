@@ -4,6 +4,9 @@ development/*
 # Yaml config files
 *.yaml
 
+# SQLite database files
+*.db
+
 # Pycharm IDE stuff
 .idea
 .idea/workspace.xml
