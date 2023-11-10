@@ -1,0 +1,39 @@
+% Load data
+data = readtable('Abgaswerte.csv');
+
+% Fix the formatting issues with the comma
+formattedColumn = strrep(data.nox_wert_in_g_km, ',', '.');
+numericColumn = str2double(formattedColumn);
+data.nox_wert_in_g_km = numericColumn;
+
+% Declare variables
+x = data.nox_wert_in_g_km;
+y = data.co2_wert_in_g_l;
+
+% Scatterplot with transparency
+figure(1); % Create new plot
+scatter(x, y, 'filled', 'MarkerFaceAlpha', 0.5); % Marker controlls the transparency
+
+% Description
+title('Scatterplot with transparency');
+xlabel('NOx'); 
+ylabel('CO2');
+
+% Scatterplot with jitter
+figure(2);
+jitterAmount = 0.1;
+jitterX = x + (rand(size(x))-0.5) * jitterAmount;
+jitterY = y + (rand(size(y))-0.5) * jitterAmount;
+scatter(jitterX, jitterY, 'filled');
+
+% Description
+title('Scatterplot with jitter');
+xlabel('NOx');
+ylabel('CO2');
+
+% Heatmap visualization
+% figure;
+% heatmap(x, y);
+%title('Heatmap of Data');
+
+
