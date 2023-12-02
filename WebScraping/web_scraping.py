@@ -89,17 +89,12 @@ print("Loging in...")
 driver = login(
     username=usr,
     password=pw,
-    url='https://www.vr-infoforum.fiducia.de/wps/portal/!ut/p/z1/04_Sj9CPykssy0xPLMnMz0vMAfIjo'
-        '8zind0dPUzMfQwM3P2CnA08TZxMjDzcnYwMfA31wwkpiAJKG-AAjgb6BbmhigALNqjY/dz/d5/'
-        'L2dBISEvZ0FBIS9nQSEh/')
+    url='nope')
 
 # Start scraping process
 print('Login erfolgreich, starte script...')
 
-driver.get('https://www.vr-infoforum.fiducia.de/wps/myportal/!ut/p/z1/04_Sj9CPykssy0xPLMnMz0v'
-           'MAfIjo8ziDfwNvJ3cAwwt3QxMDF19fA29nQwgQD8cogAHcDTQjyJKP5oCS1O4ArL0O3o6h7p'
-           '4uhn7GpOnH0lBFH7vRQL1m2PoN3L2MYTqj8hJTU9MrtQPL8tMLdcvyA0NDY2oLAcArc-0Ww'
-           '!!/dz/d5/L2dJQSEvUUt3QS80TmxFL1o2XzBPMEtCR1AxOUYwNDFFTE0xS0IwMDAwMDAw/')
+driver.get('nope nope i didnt do this')
 
 retrieve_descriptions(driver)
 
