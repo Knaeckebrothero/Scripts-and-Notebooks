@@ -1,5 +1,5 @@
 % Import data
-data = readtable('data\irisPlusRandom.csv');
+data = readtable('irisPlusRandom.csv');
 numColumns = width(data);
 
 % Iterate through all columns except the last one
@@ -17,30 +17,6 @@ for i = 1:numColumns-1
         data.(i) = double(currentColumn);
     end
 end
-
-%{
-
-% Remove rows where all elements are NaN or empty
-data = data(~all(ismissing(data), 2), :);
-
-% Convert columns to double
-numColumns = width(data);
-for i = 1:numColumns-1
-    if ~isa(data{:,i}, 'double')
-        data{:,i} = str2double(strrep(data{:,i}, ',', '.'));
-    end
-end
-
-% Select features for prediction
-features = data(:, {'sepal_width', 'petal_length', 'petal_width', 'random'});
-
-% Create the regression model
-mdl = fitlm(features, data.sepal_length);
-
-% Make predictions (using the same dataset for simplicity)
-predictions = predict(mdl, features);
-
-%}
 
 % Now, proceed with the regression
 features = data(1:145, 2:5);
