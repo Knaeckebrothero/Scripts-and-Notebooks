@@ -1,5 +1,27 @@
 % Import data
 data = readtable('irisPlusRandom.csv');
+summary(data)
+
+% Preallocate a matrix for the first five columns
+numColumns = 5;
+numRows = height(data);
+numericData = zeros(numRows, numColumns);
+
+% Convert each column to numeric
+for i = 1:numColumns
+    col = data.(i); % Get the i-th column
+    if iscell(col)
+        % Convert cells to numbers (assuming they contain numeric data as strings)
+        col = cellfun(@str2double, col);
+    elseif ischar(col) || isstring(col)
+        % If the column is a character array or string array
+        col = str2double(col);
+    end
+    % Fill the numericData matrix
+    numericData(:, i) = col;
+end
+
+%{
 numColumns = width(data);
 
 % Iterate through all columns except the last one
@@ -18,9 +40,13 @@ for i = 1:numColumns-1
     end
 end
 
+%}
+
 % Now, proceed with the regression
-features = data(1:145, 2:5);
-response = data.sepal_length(1:145);
+features = numericData(2:145, 2:5);
+response = numericData(2:145, 1:1);
 
 % Create and fit the model
 mdl = fitlm(features, response);
+
+plot(mdl)
