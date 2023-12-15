@@ -1,0 +1,9 @@
+Station,Position,Herzfrequenz,Geschwindigkeit auf letztem Wegstück
+START,Bushaltestelle Nibelungenallee,,None
+STATION 1,Ecke Friedberger Landstraße / Schwarzburgstraße,75.0,4 km/h
+STATION 2,Ecke Schwarzburgstraße / Lenaustraße,80.0,4 km/h
+STATION 3,Ecke Lenaustraße / Nordendstraße,90.0,4 km/h
+STATION 4,Ecke Nordendstraße / Spohrstraße,90.0,4 km/h
+STATION 5,Ecke Spohrstraße / Schwarzburgstraße,120.0,6 km/h
+STATION 6,Ecke Friedberger Landstraße / Schwarzburgstraße,120.0,6 km/h
+ENDE,Bushaltestelle Nibelungenallee,130.0,12 km/h
