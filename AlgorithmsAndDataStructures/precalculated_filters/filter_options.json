@@ -1,0 +1,6 @@
+{
+  "keyFigure": [1, 2],
+  "state": ["test1", "test2"],
+  "year": [1942, 2042],
+  "branch": ["test1", "test2"]
+}
