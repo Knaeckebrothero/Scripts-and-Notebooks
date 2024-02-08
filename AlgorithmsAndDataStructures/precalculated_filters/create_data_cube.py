@@ -1,4 +1,3 @@
-import csv
 import itertools
 import json
 import sqlite3
@@ -15,23 +14,37 @@ def load_filter_options(json_file):
 
     return data
 
-# Open db connection
-con = sqlite3.connect('cube.db')
-cur = con.cursor()
+def create_fact_table(cur, table_name, fieldnames):
+    # Updated SQL statement with the specified attributes
+    sql_statement = f"""
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        Quantile_25 REAL,
+        Quantile_50 REAL,
+        Quantile_75 REAL,
+        Average REAL,
+        """ + ', '.join([f"{name} Integer" for name in fieldnames]) 
+    + ")"
+
+    # Execute the SQL statement
+    cur.execute(sql_statement)
+
 
 # Load filter options
 filter_options = load_filter_options('put path here!')
 
-# Determine field names dynamically from the JSON keys plus an 'index' field
-fieldnames = list(filter_options.keys())
+# Open db connection
+con = sqlite3.connect('cube.db')
+cur = con.cursor()
 
+# Call the function to create the fact table with the specified attributes
+create_fact_table(cur, 'FactTable', filter_options.keys())
 
-writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-writer.writeheader()
-primary_key = 0
+# Commit the changes and close the connection
+con.commit()
 
 # Generate all combinations of filter options
 for combination in itertools.product(*filter_options.values()):
-    row = {'index': primary_key}
-    row.update(dict(zip(filter_options.keys(), combination)))
-    writer.writerow(row)
+    cur
+    .update(dict(zip(filter_options.keys(), combination)))
+
+con.close()
