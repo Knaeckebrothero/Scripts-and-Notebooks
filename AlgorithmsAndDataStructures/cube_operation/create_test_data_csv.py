@@ -1,5 +1,46 @@
 import csv
 import itertools
+import random
+
+#  Define the field names for the CSV file
+fieldnames = ['index', 'keyFigure', 'state', 'year', 'branch', 'value']
+
+# Arrays for the filter options (None is used as the no filter option)
+keyFigures = [None, 1, 2]
+states = [None, 'test1', 'test2']
+years = [None, 1942, 2042]
+branches = [None, 'test1', 'test2']
+
+# Open a new CSV file for writing
+with open('test_filter_table.csv', 'w', newline='') as csvfile:
+    # Create a CSV writer object
+    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+
+    # Write the header to the CSV file
+    writer.writeheader()
+
+    # Start pk at 0
+    primary_key = 0
+
+    # Create all possible combinations and loop through them
+    for combination in itertools.product(keyFigures, states, years, branches):
+        keyFigure, state, year, branch = combination
+
+        # Write each combination to the CSV file
+        writer.writerow({
+            'index': primary_key,
+            'keyFigure': keyFigure,
+            'state': state,
+            'year': year,
+            'branch': branch,
+            'value': random.randint(25, 100)})
+
+        # Increment the primary key
+        primary_key += 1
+
+"""
+import csv
+import itertools
 import json
 import pandas as pd
 
@@ -87,42 +128,8 @@ print(results_df)
 
 # Specify the path
 json_file_path = 'filter_options.json'
-csv_file_name = 'filter_table.csv'
+csv_file_name = 'test_cube.csv'
 
 # Create the CSV file
 create_csv_from_filters(json_file_path, csv_file_name)
-
-"""
-import csv
-import itertools
-
-#  Define the field names for the CSV file
-fieldnames = ['index', 'keyFigure', 'state', 'year', 'branch']
-
-# Arrays for the filter options (None is used as the no filter option)
-keyFigures = [None, 1, 2]
-states = [None, 'test1', 'test2']
-years = [None, 1942, 2042]
-branches = [None, 'test1', 'test2']
-
-# Open a new CSV file for writing
-with open('test_filter_table.csv', 'w', newline='') as csvfile:
-    # Create a CSV writer object
-    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-
-    # Write the header to the CSV file
-    writer.writeheader()
-
-    # Start pk at 0
-    primary_key = 0
-
-    # Create all possible combinations and loop through them
-    for combination in itertools.product(keyFigures, states, years, branches):
-        keyFigure, state, year, branch = combination
-
-        # Write each combination to the CSV file
-        writer.writerow({'index': primary_key, 'keyFigure': keyFigure, 'state': state, 'year': year, 'branch': branch})
-
-        # Increment the primary key
-        primary_key += 1
 """
