@@ -1,0 +1,130 @@
+variant: fcos
+version: 1.5.0
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - ssh-ed25519 SSHKEY
+systemd:
+  units:
+    - name: daily-restart.timer
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Daily Restart
+
+        [Timer]
+        OnCalendar=*-*-* 05:00:00
+        Persistent=true
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: daily-restart.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Trigger Daily Restart
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        # This line is commented out to prevent the service from starting at boot
+        # WantedBy=multi-user.target
+        WantedBy=timer.target
+    - name: k3s-install.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install k3s
+        After=network-online.target
+        Requires=network-online.target
+        Before=k3s.service
+
+        [Service]
+        Type=oneshot
+        # ExecStart=/usr/bin/curl -sfL https://get.k3s.io | sh -
+        ExecStart=/bin/sh -c '/usr/bin/curl -sfL https://get.k3s.io | sh'
+        RemainAfterExit=true
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: k3s.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Lightweight Kubernetes
+        After=network-online.target
+        Wants=network-online.target
+        Requires=k3s-install.service
+
+        [Service]
+        Type=simple
+        ExecStart=/usr/local/bin/k3s server --data-dir /var/data/k3s
+        Restart=on-failure
+        RestartSec=5s
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: k3s-resources.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Deploy Kubernetes resources
+        After=k3s.service
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/bin/kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+        ExecStart=/usr/local/bin/kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.0.0/aio/deploy/recommended.yaml
+        RemainAfterExit=true
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: backup-k3s.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Backup k3s data
+        Before=daily-restart.service
+        After=k3s.service
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/cp -a /var/data/k3s /var/storage/backup/daily
+
+        [Install]
+        WantedBy=multi-user.target
+storage:
+  disks:
+  - device: /dev/disk/by-id/coreos-boot-disk
+    wipe_table: false
+    partitions:
+    - number: 4
+      label: root
+      size_mib: 16384 # At least 8192
+      resize: true
+    - size_mib: 0
+      label: var
+  - device: /dev/sdb
+    wipe_table: true
+    partitions:
+    - size_mib: 0
+      start_mib: 0
+      label: storage
+  filesystems:
+    - path: /var
+      device: /dev/disk/by-partlabel/var
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+    - path: /var/storage
+      device: /dev/disk/by-partlabel/storage
+      format: ext4
+      with_mount_unit: true
+  directories:
+    - path: /var/data/k3s
+    - path: /var/storage/config
+    - path: /var/storage/backup/daily
+    - path: /var/storage/backup/weekly
