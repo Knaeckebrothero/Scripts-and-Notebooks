@@ -4,7 +4,7 @@ passwd:
   users:
     - name: core
       ssh_authorized_keys:
-        - ssh-ed25519 SSHKEY
+        - ssh-ed25519 SSH_KEY_GOES_HERE
 systemd:
   units:
     - name: daily-restart.timer
@@ -33,6 +33,20 @@ systemd:
         # This line is commented out to prevent the service from starting at boot
         # WantedBy=multi-user.target
         WantedBy=timer.target
+    - name: zincati.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Zincati Update Service
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        ExecStart=/usr/libexec/zincati agent -v
+        Restart=on-failure
+
+        [Install]
+        WantedBy=multi-user.target
     - name: k3s-install.service
       enabled: true
       contents: |
@@ -44,6 +58,7 @@ systemd:
 
         [Service]
         Type=oneshot
+        # Use shell to read from stdin
         # ExecStart=/usr/bin/curl -sfL https://get.k3s.io | sh -
         ExecStart=/bin/sh -c '/usr/bin/curl -sfL https://get.k3s.io | sh'
         RemainAfterExit=true
@@ -92,7 +107,7 @@ systemd:
 
         [Service]
         Type=oneshot
-        ExecStart=/usr/bin/cp -a /var/data/k3s /var/storage/backup/daily
+        ExecStart=/usr/bin/cp -a /var/data/k3s /var/storage/backup/k3s
 
         [Install]
         WantedBy=multi-user.target
@@ -122,9 +137,24 @@ storage:
     - path: /var/storage
       device: /dev/disk/by-partlabel/storage
       format: ext4
+      wipe_filesystem: true
       with_mount_unit: true
   directories:
-    - path: /var/data/k3s
-    - path: /var/storage/config
-    - path: /var/storage/backup/daily
-    - path: /var/storage/backup/weekly
+    - path: /var/data/k3s # Kubernetes persistent data
+    - path: /var/storage/config # Configuration files intended to be managed by the user
+    - path: /var/storage/backup/k3s # Backup of k3s data
+  files:
+    - path: /etc/zincati/config.d/90-custom.toml
+      overwrite: true
+      contents:
+        inline: |
+          [updates]
+          strategy = "periodic"
+          periodic.interval_minutes = 1440 # Checks for updates every 24h
+
+          [updates.allow_downgrade]
+          enabled = false  # Avoid downgrades
+
+          [reboot]
+          strategy = "off" # Disable reboot, since server reboots on daily basis anyway
+      mode: 0644
