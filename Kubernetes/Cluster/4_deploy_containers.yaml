@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mysql
+spec:
+  selector:
+    matchLabels:
+      app: mysql
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mysql
+    spec:
+      containers:
+      - image: mysql:latest
+        name: mysql
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          value: "password"
+        ports:
+        - containerPort: 3306
+          name: mysql
+        args:
+          - "--ssl-ca=/etc/mysql/ca.pem"
+          - "--ssl-cert=/etc/mysql/server-cert.pem"
+          - "--ssl-key=/etc/mysql/server-key.pem"
+        volumeMounts:
+        - name: mysql-data
+          mountPath: /var/lib/mysql
+        - name: cert-volume
+          mountPath: "/etc/mysql"
+          readOnly: true
+      volumes:
+      - name: mysql-data
+        persistentVolumeClaim:
+          claimName: pvc-mysql
+      - name: cert-volume
+        secret:
+          secretName: mysql-certs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mongodb
+spec:
+  selector:
+    matchLabels:
+      app: mongodb
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: mongodb
+    spec:
+      containers:
+      - image: mongo:latest
+        name: mongo
+        ports:
+        - containerPort: 27017
+          name: mongo
+        args:
+          - "--tlsMode"
+          - "requireTLS"
+          - "--tlsCertificateKeyFile"
+          - "/etc/mongodb/mongodb.pem"
+        volumeMounts:
+        - name: mongo-data
+          mountPath: /data/db
+      volumes:
+      - name: mongo-data
+        persistentVolumeClaim:
+          claimName: pvc-mongodb
+      - name: cert-volume
+        secret:
+          secretName: mongodb-certs

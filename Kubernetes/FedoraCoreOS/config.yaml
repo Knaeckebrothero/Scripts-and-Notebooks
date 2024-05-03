@@ -1,0 +1,131 @@
+variant: fcos
+version: 1.5.0
+passwd:
+  users:
+    - name: core
+      ssh_authorized_keys:
+        - ssh-ed25519 Key
+systemd:
+  units:
+    - name: daily-restart.timer
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Daily Restart
+
+        [Timer]
+        OnCalendar=*-*-* 05:00:00
+        Persistent=true
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: daily-restart.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Trigger Daily Restart
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/systemctl reboot
+
+        [Install]
+        # This line is commented out to prevent the service from starting at boot
+        # WantedBy=multi-user.target
+        WantedBy=timer.target
+    - name: k3s-install.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install k3s
+        After=network-online.target
+        Requires=network-online.target
+        Before=k3s.service
+
+        [Service]
+        Type=oneshot
+        # Use shell to read from stdin
+        # ExecStart=/usr/bin/curl -sfL https://get.k3s.io | sh -
+        ExecStart=/bin/sh -c '/usr/bin/curl -sfL https://get.k3s.io | sh'
+        RemainAfterExit=true
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: k3s.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Lightweight Kubernetes
+        After=network-online.target
+        Wants=network-online.target
+        Requires=k3s-install.service
+
+        [Service]
+        Type=simple
+        ExecStart=/usr/local/bin/k3s server --data-dir /var/data/k3s
+        Restart=on-failure
+        RestartSec=5s
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: backup-k3s.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Backup k3s data
+        Before=daily-restart.service
+        After=k3s.service
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/cp -a /var/data/k3s /var/storage/backup/k3s
+
+        [Install]
+        WantedBy=multi-user.target
+storage:
+  disks:
+  - device: /dev/disk/by-id/coreos-boot-disk
+    wipe_table: false
+    partitions:
+    - number: 4
+      label: root
+      size_mib: 16384 # At least 8192
+      resize: true
+    - size_mib: 0
+      label: var
+  - device: /dev/sdb
+    wipe_table: true
+    partitions:
+    - size_mib: 0
+      start_mib: 0
+      label: storage
+  filesystems:
+    - path: /var
+      device: /dev/disk/by-partlabel/var
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+    - path: /var/storage
+      device: /dev/disk/by-partlabel/storage
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+  directories:
+    - path: /var/data/k3s # Kubernetes persistent data
+    - path: /var/storage/config # Configuration files intended to be managed by the user
+    - path: /var/storage/backup/k3s # Backup of k3s data
+  files:
+    - path: /etc/zincati/config.d/90-custom.toml
+      overwrite: true
+      contents:
+        inline: |
+          [updates]
+          strategy = "periodic"
+          periodic.interval_minutes = 1440 # Checks for updates every 24h
+
+          [updates.allow_downgrade]
+          enabled = false  # Avoid downgrades
+
+          [reboot]
+          strategy = "off" # Disable reboot, since server reboots on daily basis anyway
+      mode: 0644
