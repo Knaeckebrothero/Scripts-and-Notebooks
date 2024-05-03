@@ -23,14 +23,14 @@ spec:
         - containerPort: 3306
           name: mysql
         args:
-          - "--ssl-ca=/etc/mysql/ca.pem"
-          - "--ssl-cert=/etc/mysql/server-cert.pem"
-          - "--ssl-key=/etc/mysql/server-key.pem"
+          - "--ssl-ca=/mysql-certs/ca.pem"
+          - "--ssl-cert=/mysql-certs/server-cert.pem"
+          - "--ssl-key=/mysql-certs/server-key.pem"
         volumeMounts:
         - name: mysql-data
           mountPath: /var/lib/mysql
         - name: cert-volume
-          mountPath: "/etc/mysql"
+          mountPath: /mysql-certs
           readOnly: true
       volumes:
       - name: mysql-data
@@ -61,11 +61,6 @@ spec:
         ports:
         - containerPort: 27017
           name: mongo
-        args:
-          - "--tlsMode"
-          - "requireTLS"
-          - "--tlsCertificateKeyFile"
-          - "/etc/mongodb/mongodb.pem"
         volumeMounts:
         - name: mongo-data
           mountPath: /data/db
@@ -73,6 +68,3 @@ spec:
       - name: mongo-data
         persistentVolumeClaim:
           claimName: pvc-mongodb
-      - name: cert-volume
-        secret:
-          secretName: mongodb-certs
