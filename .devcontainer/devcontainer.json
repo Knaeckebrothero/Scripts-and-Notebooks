@@ -8,7 +8,7 @@
     "extensions": [
         "ms-python.python"
     ],
-    "postCreateCommand": "apt-get update && apt-get install -y tesseract-ocr openssh-server && mkdir /var/run/sshd && echo 'root:test123' | chpasswd && sed -ri 's/^#?PermitRootLogin\\s+.*/PermitRootLogin yes/' /etc/ssh/sshd_config && service ssh start && pip install -r requirements.txt",
+    "postCreateCommand": "sudo apt-get update && sudo apt-get install -y tesseract-ocr openssh-server && sudo mkdir /var/run/sshd && echo 'root:test123' | chpasswd && sed -ri 's/^#?PermitRootLogin\\s+.*/PermitRootLogin yes/' /etc/ssh/sshd_config && service ssh start && pip install -r requirements.txt",
     "remoteUser": "vscode",
     "forwardPorts": [2222],
     "mounts": [
