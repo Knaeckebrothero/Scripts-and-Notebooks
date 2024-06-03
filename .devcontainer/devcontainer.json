@@ -1,0 +1,22 @@
+{
+    "name": "Python Tesseract Dev Container",
+    "image": "mcr.microsoft.com/vscode/devcontainers/python:3.11",
+    "runArgs": ["--network", "none"],
+    "settings": {
+        "terminal.integrated.shell.linux": "/bin/bash"
+    },
+    "extensions": [
+        "ms-python.python"
+    ],
+    // "postCreateCommand": "apt-get update && apt-get install -y tesseract-ocr && pip install -r requirements.txt",
+    "postCreateCommand": "apt-get update && apt-get install -y tesseract-ocr openssh-server && mkdir /var/run/sshd && echo 'root:test123' | chpasswd && sed -ri 's/^#?PermitRootLogin\s+.*/PermitRootLogin yes/' /etc/ssh/sshd_config && service ssh start && pip install -r requirements.txt",
+    "remoteUser": "vscode",
+    "forwardPorts": [2222],
+    "mounts": [
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"
+    ],
+    "remoteEnv": {
+        "PYTHONPATH": "/workspace"
+    },
+    "containerUser": "root"
+}
