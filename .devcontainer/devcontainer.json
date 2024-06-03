@@ -7,7 +7,7 @@
     "extensions": [
         "ms-python.python"
     ],
-    "postCreateCommand": "sudo bash -c 'echo \"Acquire::http::Proxy \\\"http://127.0.0.1:3142\\\";\" > /etc/apt/apt.conf.d/02proxy && apt-get update && apt-get install -y tesseract-ocr openssh-server && mkdir /var/run/sshd && echo root:test123 | chpasswd && sed -ri s/^#?PermitRootLogin\\s+.*/PermitRootLogin yes/ /etc/ssh/sshd_config && service ssh start && pip install -r requirements.txt && rm /etc/apt/apt.conf.d/02proxy'",
+    "postCreateCommand": "sudo apt-get update && sudo apt-get install -y tesseract-ocr openssh-server && sudo mkdir /var/run/sshd && echo 'root:test123' | sudo chpasswd && sudo sed -ri 's/^#?PermitRootLogin\\s+.*/PermitRootLogin yes/' /etc/ssh/sshd_config && sudo service ssh start && pip install -r requirements.txt",
     "remoteUser": "vscode",
     "forwardPorts": [2222],
     "mounts": [
