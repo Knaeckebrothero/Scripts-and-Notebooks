@@ -18,7 +18,8 @@ model = AutoModelForCausalLM.from_pretrained(
     model_id,
     device_map="cuda",
     torch_dtype="auto",
-    trust_remote_code=True
+    trust_remote_code=True,
+    attn_implementation="eager"
 )
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 
@@ -37,7 +38,7 @@ generation_args = {
     "max_new_tokens": 1500,
     "return_full_text": False,
     "temperature": 0.7,
-    "do_sample": False,
+    "do_sample": True,
 }
 
 output = pipe(messages, **generation_args)
