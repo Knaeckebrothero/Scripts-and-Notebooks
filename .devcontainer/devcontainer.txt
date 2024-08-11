@@ -1,0 +1,71 @@
+{
+    "name": "Python Tesseract Dev Container",
+    "image": "mcr.microsoft.com/devcontainers/python:3.11",
+    "forwardPorts": [3000],
+    "customizations": {
+        // Configure properties specific to VS Code.
+        "vscode": {
+            // Add the IDs of extensions you want installed when the container is created.
+            "extensions": ["streetsidesoftware.code-spell-checker"]
+        }
+    }
+}
+
+
+{
+    "name": "Python Tesseract Dev Container",
+    "image": "mcr.microsoft.com/devcontainers/python:3.11",
+    "features": {
+        "ghcr.io/devcontainers/features/python:1": {},
+        "ghcr.io/devcontainers/features/common-utils:2": {},
+        "ghcr.io/devcontainers-contrib/features/apt-packages:1": {
+            "packages": "tesseract-ocr libtesseract-dev poppler-utils"
+        }
+    },
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "bash"
+            },
+            "extensions": [
+                "ms-python.python"
+            ]
+        }
+    },
+    "postCreateCommand": "pip install -r requirements.txt",
+    "remoteUser": "vscode",
+    "mounts": [
+        "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"
+    ],
+    "remoteEnv": {
+        "PYTHONPATH": "/workspace"
+    },
+    "runArgs": [
+        "--network=no-internet"
+    ]
+}
+
+
+"customizations": {
+    "vscode": {
+        "settings": {
+            "terminal.integrated.defaultProfile.linux": "bash"
+        },
+        "extensions": [
+            "ms-python.python"
+        ]
+    }
+},
+"remoteUser": "vscode",
+"mounts": [
+    "source=${localEnv:HOME}${localEnv:USERPROFILE}/.ssh,target=/home/vscode/.ssh,type=bind,consistency=cached"
+],
+"remoteEnv": {
+    "PYTHONPATH": "/workspace"
+},
+"runArgs": [
+    "--network=no-internet"
+]
+}
+{
+"image": "mcr.microsoft.com/devcontainers/typescript-node",
