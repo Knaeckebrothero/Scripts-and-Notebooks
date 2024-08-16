@@ -1,0 +1,15 @@
+# https://docs.k3s.io/
+# Rancher's Local Path Provisioner
+# Apperently k3s does not need volumes and works with pvcs only???
+
+apiVersion: v1
+kind: PersistentVolume # Type of resource
+metadata:
+  name: pv-mongodb # Name
+spec:
+  capacity:
+    storage: 128Gi # Capacity
+  accessModes:
+    - ReadWriteOnce # Access mode
+  hostPath:
+    path: "/var/volumes/mongodb" # Storage path

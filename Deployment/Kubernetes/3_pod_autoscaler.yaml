@@ -1,0 +1,52 @@
+# https://docs.k3s.io/
+# Pods can be scaled horizontally and vertically (You only wanna use one at a time).
+# Horizontal scaling is done using the Horizontal Pod Autoscaler (HPA).
+# Vertical scaling is done using the Vertical Pod Autoscaler (VPA).
+
+# Horizontal Pod Autoscaler
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler # Type of resource
+metadata:
+  name: hpa-mongodb # Name
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mongodb
+  minReplicas: 1
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 50
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 50
+--- # You can use three dashes to separate documents
+# Vertical Pod Autoscaler
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-mongodb
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mongodb
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: mongodb
+        minAllowed:
+          cpu: "250m"
+          memory: "1Gi"
+        maxAllowed:
+          cpu: "7000m"
+          memory: "28Gi"
