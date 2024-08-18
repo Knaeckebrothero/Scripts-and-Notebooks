@@ -1,0 +1,108 @@
+# # K3s Kubernetes Deployment for Valheim Server
+# https://hub.docker.com/r/lloesche/valheim-server
+# https://github.com/Addyvan/valheim-k8s
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: longhorn-valheim-pvc
+  namespace: games
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 32Gi
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: vpa-valheim
+  namespace: games
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: valheim-server
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: valheim-server
+        minAllowed:
+          cpu: "500m"
+          memory: "4Gi"
+        maxAllowed:
+          cpu: "4000m"
+          memory: "16Gi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: valheim-server
+  namespace: games
+spec:
+  selector:
+    matchLabels:
+      app: valheim-server
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: valheim-server
+    spec:
+      containers:
+      - image: lloesche/valheim-server:latest
+        name: valheim-server
+        env:
+          - name: SERVER_NAME
+            value: "SERVER_NAME_GOES_HERE"
+          - name: WORLD_NAME
+            value: "WORLD_NAME_GOES_HERE"
+          - name: SERVER_PASS
+            value: "SERVER_PASS_GOES_HERE"
+          - name: BACKUPS_MAX_AGES
+            value: "7"
+          - name: SERVER_ARGS 
+            # https://help.serverflex.io/valheim-server-command-line-arguments/
+            # https://www.valheimgame.com/support/a-guide-to-dedicated-servers/
+            value: "-autosaveinterval 900 -saveinterval 900" # Must be one of them not sure which one though...
+        ports:
+        - containerPort: 2456
+          name: valheim-2456
+        - containerPort: 2457
+          name: valheim-2457
+        - containerPort: 2458
+          name: valheim-2458
+        volumeMounts:
+        - name: valheim-data
+          mountPath: /config
+      volumes:
+      - name: valheim-data
+        persistentVolumeClaim:
+          claimName: longhorn-valheim-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: valheim-loadbalancer
+  namespace: games
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 2456
+      targetPort: 2456
+      protocol: UDP
+      name: udp2456
+    - port: 2457
+      targetPort: 2457
+      protocol: UDP
+      name: udp2457
+    - port: 2458
+      targetPort: 2458
+      protocol: UDP
+      name: udp2458
+  selector:
+    app: valheim-server

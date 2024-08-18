@@ -1,0 +1,60 @@
+# K3s Kubernetes Deployment for Grafana
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: longhorn-grafana-pvc
+  namespace: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 15Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana-deployment
+  namespace: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: GF_SECURITY_ADMIN_USER
+          value: "USER_GOES_HERE"
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: "PASSWORD_GOES_HERE"
+        volumeMounts:
+        - name: grafana-storage
+          mountPath: "/var/lib/grafana"
+      volumes:
+      - name: grafana-storage
+        persistentVolumeClaim:
+          claimName: longhorn-grafana-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-loadbalancer
+  namespace: monitoring
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 3000
+      targetPort: 3000
+  selector:
+    app: grafana
