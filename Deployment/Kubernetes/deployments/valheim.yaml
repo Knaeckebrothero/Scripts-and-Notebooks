@@ -63,12 +63,24 @@ spec:
             value: "WORLD_NAME_GOES_HERE"
           - name: SERVER_PASS
             value: "SERVER_PASS_GOES_HERE"
-          - name: BACKUPS_MAX_AGES
+          - name: ADMINLIST_IDS
+            value: "LIST_OF_ADMIN_IDS_GOES_HERE" # Space separated list of Steam IDs
+          - name: BACKUPS_MAX_AGE
             value: "7"
+          
+          # Game server settings (aka CLI arguments)
           - name: SERVER_ARGS 
-            # https://help.serverflex.io/valheim-server-command-line-arguments/
-            # https://www.valheimgame.com/support/a-guide-to-dedicated-servers/
-            value: "-autosaveinterval 900 -saveinterval 900" # Must be one of them not sure which one though...
+            value: "-saveinterval 1800"
+
+          # Supervisor HTTP server settings
+          - name: SUPERVISOR_HTTP
+            value: "true"
+          - name: SUPERVISOR_HTTP_PORT
+            value: "9001"
+          - name: SUPERVISOR_HTTP_USER
+            value: "SUPERVISOR_HTTP_USER_GOES_HERE"
+          - name: SUPERVISOR_HTTP_PASS
+            value: "SUPERVISOR_HTTP_PASSWORD_GOES_HERE"
         ports:
         - containerPort: 2456
           name: valheim-2456
@@ -76,6 +88,9 @@ spec:
           name: valheim-2457
         - containerPort: 2458
           name: valheim-2458
+        # Only needed if SUPERVISOR_HTTP is set to true
+        - containerPort: 9001
+          name: supervisor-http
         volumeMounts:
         - name: valheim-data
           mountPath: /config
@@ -104,5 +119,10 @@ spec:
       targetPort: 2458
       protocol: UDP
       name: udp2458
+    # Only needed if SUPERVISOR_HTTP is set to true
+    - port: 9001
+      targetPort: 9001
+      protocol: TCP
+      name: tcp9001
   selector:
     app: valheim-server
