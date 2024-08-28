@@ -50,13 +50,28 @@ def format_prompt(system_prompt: str) -> ChatPromptTemplate:
     return chat_prompt_template
 
 
+def format_prompt_simple(system_prompt: str) -> ChatPromptTemplate:
+    """
+    This function formats the system prompt as a ChatPromptTemplate for a LangChain agent.
+    https://smith.langchain.com/hub/hwchase17/openai-functions-agent
+
+    :param system_prompt: The system prompt to format.
+    :return: The prompt formatted as a ChatPromptTemplate.
+    """
+    return ChatPromptTemplate.from_messages([
+        ("system", system_prompt),
+        ("placeholder", "{chat_history}"),
+        ("human", "{input}"),
+        ("placeholder", "{agent_scratchpad}"),
+    ])
+
+
 # Load the environment variables
 dotenv.load_dotenv()
 
 # Create a search object
 search = TavilySearchResults()
 # print(search.invoke("what is the weather in SF"))
-
 
 # Load some documents from the web and store them in a vector store
 loader = WebBaseLoader("https://docs.smith.langchain.com/overview")
@@ -78,7 +93,7 @@ retriever_tool = create_retriever_tool(
 # All the parts of the agent
 tools = [search, retriever_tool]
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-prompt = format_prompt("You are a helpful assistant tha can be asked anything about LangSmith.")
+prompt = format_prompt_simple("You are a helpful assistant tha can be asked anything about LangSmith.")
 
 # Create the agent
 agent = create_tool_calling_agent(llm, tools, prompt)
@@ -87,5 +102,5 @@ agent = create_tool_calling_agent(llm, tools, prompt)
 agent_executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
 
 # Run the agent
-result = agent_executor.invoke({"input": "hi!"})
-print("\n\n\n", result)
+result = agent_executor.invoke({"input": "Can you tell me what's in the LangSmith documentation?"})
+print("\n", result)
