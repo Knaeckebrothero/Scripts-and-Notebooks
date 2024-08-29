@@ -1,0 +1,70 @@
+# K3s Kubernetes Deployment for a Postgres db used by Nextcloud
+# https://hub.docker.com/_/postgres
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: longhorn-postgres-nextcloud-pvc
+  namespace: apps
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 64Gi
+---
+apiVersion: autoscaling.k8s.io/v1
+kind: VerticalPodAutoscaler
+metadata:
+  name: postgres-nextcloud-vpa
+  namespace: apps
+spec:
+  targetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: postgres-nextcloud
+  updatePolicy:
+    updateMode: Auto
+  resourcePolicy:
+    containerPolicies:
+      - containerName: postgres-nextcloud
+        minAllowed:
+          cpu: "100m"
+          memory: "1Gi"
+        maxAllowed:
+          cpu: "2000m"
+          memory: "8Gi"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres-nextcloud
+  namespace: apps
+spec:
+  selector:
+    matchLabels:
+      app: postgres-nextcloud
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: postgres-nextcloud
+    spec:
+      containers:
+      - image: docker.io/library/postgres:latest
+        name: postgres-nextcloud
+        env:
+          - name: Variable
+            value: "Value"
+        ports:
+        - containerPort: 2456
+          name: postgres-nextcloud
+        volumeMounts:
+        - name: postgres-nextcloud
+             mountPath: /config
+      volumes:
+      - name: postgres-nextcloud
+         persistentVolumeClaim:
+          claimName: longhorn-postgres-nextcloud-pvc
