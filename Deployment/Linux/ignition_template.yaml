@@ -1,12 +1,23 @@
+# Use butane to generate the ignition file
+# Windows command: butane --pretty --strict config.bu --output config.ign
 variant: fcos
 version: 1.5.0
+
+# User configuration
 passwd:
   users:
-    - name: core
+    - name: core # CoreOS user with sudo privileges and SSH key for remote access
       ssh_authorized_keys:
-        - ssh-ed25519 SSH_KEY_GOES_HERE
+        - ssh-ed25519 SSH_KEY_GOES_HERE MAIL_ADDRESS_GOES_HERE
+    
+    # Additional users for services
+    - name: node_exporter_user
+    - name: k3s_user
+
+# System services configuration
 systemd:
   units:
+    # Setup daily reboot timer (reboots at 03:00 every day, gmt timezone)
     - name: daily-restart.timer
       enabled: true
       contents: |
@@ -14,7 +25,7 @@ systemd:
         Description=Daily Restart
 
         [Timer]
-        OnCalendar=*-*-* 05:00:00
+        OnCalendar=*-*-* 03:00:00
         Persistent=true
 
         [Install]
@@ -33,20 +44,43 @@ systemd:
         # This line is commented out to prevent the service from starting at boot
         # WantedBy=multi-user.target
         WantedBy=timer.target
-    - name: zincati.service
+
+    # Install and start node exporter
+    - name: node-exporter-install.service
       enabled: true
       contents: |
         [Unit]
-        Description=Zincati Update Service
+        Description=Install Node Exporter
+        After=network-online.target
+        Wants=network-online.target
+        Before=node-exporter.service
+
+        [Service]
+        Type=oneshot
+        User=node_exporter_user
+        ExecStart=/bin/sh -c 'set -x; cd /tmp; /usr/bin/curl -sfL -LO https://github.com/prometheus/node_exporter/releases/download/v1.8.0/node_exporter-1.8.0.linux-amd64.tar.gz && tar xvfz node_exporter-1.8.0.linux-amd64.tar.gz && cp node_exporter-1.8.0.linux-amd64/node_exporter /usr/local/bin/node_exporter && rm -rf node_exporter-1.8.0.linux-amd64*'
+        RemainAfterExit=true
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: node-exporter.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Node Exporter
         After=network-online.target
         Wants=network-online.target
 
         [Service]
-        ExecStart=/usr/libexec/zincati agent -v
+        User=node_exporter_user
+        ExecStart=/usr/local/bin/node_exporter
         Restart=on-failure
+        RestartSec=5s
 
         [Install]
         WantedBy=multi-user.target
+
+    # Install and start Kubernetes
     - name: k3s-install.service
       enabled: true
       contents: |
@@ -58,8 +92,7 @@ systemd:
 
         [Service]
         Type=oneshot
-        # Use shell to read from stdin
-        # ExecStart=/usr/bin/curl -sfL https://get.k3s.io | sh -
+        User=k3s_user
         ExecStart=/bin/sh -c '/usr/bin/curl -sfL https://get.k3s.io | sh'
         RemainAfterExit=true
 
@@ -76,73 +109,57 @@ systemd:
 
         [Service]
         Type=simple
-        ExecStart=/usr/local/bin/k3s server --data-dir /var/data/k3s
+        User=k3s_user
+        ExecStart=/usr/local/bin/k3s server
         Restart=on-failure
         RestartSec=5s
 
         [Install]
         WantedBy=multi-user.target
-    - name: k3s-resources.service
+
+    # Setup zincati update service
+    - name: zincati.service
       enabled: true
       contents: |
         [Unit]
-        Description=Deploy Kubernetes resources
-        After=k3s.service
+        Description=Zincati Update Service
+        After=network-online.target
+        Wants=network-online.target
 
         [Service]
-        Type=oneshot
-        ExecStart=/usr/local/bin/kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-        ExecStart=/usr/local/bin/kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.0.0/aio/deploy/recommended.yaml
-        RemainAfterExit=true
+        ExecStart=/usr/libexec/zincati agent -v
+        Restart=on-failure
+        RestartSec=5s
 
         [Install]
         WantedBy=multi-user.target
-    - name: backup-k3s.service
-      enabled: true
-      contents: |
-        [Unit]
-        Description=Backup k3s data
-        Before=daily-restart.service
-        After=k3s.service
 
-        [Service]
-        Type=oneshot
-        ExecStart=/usr/bin/cp -a /var/data/k3s /var/storage/backup/k3s
-
-        [Install]
-        WantedBy=multi-user.target
+# Storage configuration
 storage:
   disks:
-  - device: /dev/disk/by-id/coreos-boot-disk
-    wipe_table: false
-    partitions:
-    - number: 4
-      label: root
-      size_mib: 16384 # At least 8192
-      resize: true
-    - size_mib: 0
-      label: var
-  - device: /dev/sdb
-    wipe_table: true
-    partitions:
-    - size_mib: 0
-      start_mib: 0
-      label: storage
+    - device: /dev/disk/by-id/coreos-boot-disk
+      wipe_table: false
+      partitions:
+      - number: 4
+        label: root
+        size_mib: 32768 # At least 8192
+        resize: true
+      - size_mib: 0
+        label: var
+
+  # Configure file systems and mount them on the previously configured hard drives
   filesystems:
     - path: /var
       device: /dev/disk/by-partlabel/var
       format: ext4
       wipe_filesystem: true
       with_mount_unit: true
-    - path: /var/storage
-      device: /dev/disk/by-partlabel/storage
-      format: ext4
-      wipe_filesystem: true
-      with_mount_unit: true
+
+  # Create working directories
   directories:
-    - path: /var/data/k3s # Kubernetes persistent data
-    - path: /var/storage/config # Configuration files intended to be managed by the user
-    - path: /var/storage/backup/k3s # Backup of k3s data
+    # - path: /var/...
+  
+  # Create configuration files
   files:
     - path: /etc/zincati/config.d/90-custom.toml
       overwrite: true
@@ -157,4 +174,5 @@ storage:
 
           [reboot]
           strategy = "off" # Disable reboot, since server reboots on daily basis anyway
-      mode: 0644
+      mode: 0755
+      
