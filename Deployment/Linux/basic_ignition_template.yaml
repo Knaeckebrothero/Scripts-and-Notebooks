@@ -6,13 +6,14 @@ version: 1.5.0
 # User configuration
 passwd:
   users:
-    - name: core # CoreOS user with sudo privileges and SSH key for remote access
+    # CoreOS user with sudo privileges and SSH key for remote access
+    - name: core 
       ssh_authorized_keys:
         - ssh-ed25519 SSH_KEY_GOES_HERE MAIL_ADDRESS_GOES_HERE
     
-    # Additional users for services
+    # Additional service users
     - name: node_exporter_user
-    - name: k3s_user
+      system: true
 
 # System services configuration
 systemd:
@@ -57,7 +58,6 @@ systemd:
 
         [Service]
         Type=oneshot
-        User=node_exporter_user
         ExecStart=/bin/sh -c 'set -x; cd /tmp; /usr/bin/curl -sfL -LO https://github.com/prometheus/node_exporter/releases/download/v1.8.0/node_exporter-1.8.0.linux-amd64.tar.gz && tar xvfz node_exporter-1.8.0.linux-amd64.tar.gz && cp node_exporter-1.8.0.linux-amd64/node_exporter /usr/local/bin/node_exporter && rm -rf node_exporter-1.8.0.linux-amd64*'
         RemainAfterExit=true
 
@@ -72,45 +72,9 @@ systemd:
         Wants=network-online.target
 
         [Service]
+        Type=simple
         User=node_exporter_user
         ExecStart=/usr/local/bin/node_exporter
-        Restart=on-failure
-        RestartSec=5s
-
-        [Install]
-        WantedBy=multi-user.target
-
-    # Install and start Kubernetes
-    - name: k3s-install.service
-      enabled: true
-      contents: |
-        [Unit]
-        Description=Install k3s
-        After=network-online.target
-        Requires=network-online.target
-        Before=k3s.service
-
-        [Service]
-        Type=oneshot
-        User=k3s_user
-        ExecStart=/bin/sh -c '/usr/bin/curl -sfL https://get.k3s.io | sh'
-        RemainAfterExit=true
-
-        [Install]
-        WantedBy=multi-user.target
-    - name: k3s.service
-      enabled: true
-      contents: |
-        [Unit]
-        Description=Lightweight Kubernetes
-        After=network-online.target
-        Wants=network-online.target
-        Requires=k3s-install.service
-
-        [Service]
-        Type=simple
-        User=k3s_user
-        ExecStart=/usr/local/bin/k3s server
         Restart=on-failure
         RestartSec=5s
 
@@ -127,6 +91,7 @@ systemd:
         Wants=network-online.target
 
         [Service]
+        Type=simple
         ExecStart=/usr/libexec/zincati agent -v
         Restart=on-failure
         RestartSec=5s
@@ -137,14 +102,15 @@ systemd:
 # Storage configuration
 storage:
   disks:
+    # Configure the main hard drive for the operating system
     - device: /dev/disk/by-id/coreos-boot-disk
       wipe_table: false
       partitions:
-      - number: 4
+      - number: 4 # This is the root partition where the OS is installed
         label: root
         size_mib: 32768 # At least 8192
         resize: true
-      - size_mib: 0
+      - size_mib: 0 # This is the var partition, which will take up the rest of the disk
         label: var
 
   # Configure file systems and mount them on the previously configured hard drives
@@ -155,12 +121,13 @@ storage:
       wipe_filesystem: true
       with_mount_unit: true
 
-  # Create working directories
-  directories:
+  # Create directories if needed
+  # directories:
     # - path: /var/...
   
-  # Create configuration files
-  files:
+  # Create files
+  files:    
+    # Config file for zincati
     - path: /etc/zincati/config.d/90-custom.toml
       overwrite: true
       contents:
@@ -174,5 +141,6 @@ storage:
 
           [reboot]
           strategy = "off" # Disable reboot, since server reboots on daily basis anyway
-      mode: 0755
-      
+      mode: 0644
+      user:
+        name: root

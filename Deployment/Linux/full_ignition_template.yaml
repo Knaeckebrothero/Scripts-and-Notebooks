@@ -6,12 +6,13 @@ version: 1.5.0
 # User configuration
 passwd:
   users:
-    - name: core # CoreOS user with sudo privileges and SSH key for remote access
+    # CoreOS user with sudo privileges and SSH key for remote access
+    - name: core 
       ssh_authorized_keys:
         - ssh-ed25519 SSH_KEY_GOES_HERE MAIL_ADDRESS_GOES_HERE
     
-    # Additional users for services
-    - name: monitoring_user
+    # Additional service users
+    - name: node_exporter_user
       system: true
     - name: k3s_user
       system: true
@@ -47,27 +48,6 @@ systemd:
         # WantedBy=multi-user.target
         WantedBy=timer.target
 
-    # Description: This file is used to configure the mdadm RAID tools on a system.
-    - name: rpm-ostree-install-raid-tools.service
-      enabled: true
-      contents: |
-        [Unit]
-        Description=Layer RAID tools with rpm-ostree
-        Wants=network-online.target
-        After=network-online.target
-        Before=zincati.service
-        ConditionPathExists=!/var/lib/%N.stamp
-
-        [Service]
-        Type=oneshot
-        RemainAfterExit=yes
-        ExecStart=/usr/bin/rpm-ostree install -y --allow-inactive mdadm dmraid
-        ExecStart=/bin/touch /var/lib/%N.stamp
-        ExecStart=/bin/systemctl --no-block reboot
-
-        [Install]
-        WantedBy=multi-user.target
-
     # Install and start node exporter
     - name: node-exporter-install.service
       enabled: true
@@ -80,7 +60,11 @@ systemd:
 
         [Service]
         Type=oneshot
-        ExecStart=/bin/sh -c 'set -x; cd /tmp; /usr/bin/curl -sfL -LO https://github.com/prometheus/node_exporter/releases/download/v1.8.0/node_exporter-1.8.0.linux-amd64.tar.gz && tar xvfz node_exporter-1.8.0.linux-amd64.tar.gz && cp node_exporter-1.8.0.linux-amd64/node_exporter /usr/local/bin/node_exporter && rm -rf node_exporter-1.8.0.linux-amd64*'
+        ExecStart=/bin/sh -c '\
+          set -x; cd /tmp; /usr/bin/curl -sfL -LO https://github.com/prometheus/node_exporter/releases/download/v1.8.0/node_exporter-1.8.0.linux-amd64.tar.gz && \
+          tar xvfz node_exporter-1.8.0.linux-amd64.tar.gz && \
+          cp node_exporter-1.8.0.linux-amd64/node_exporter /usr/local/bin/node_exporter && \
+          rm -rf node_exporter-1.8.0.linux-amd64*'
         RemainAfterExit=true
 
         [Install]
@@ -95,44 +79,8 @@ systemd:
 
         [Service]
         Type=simple
-        User=monitoring_user
+        User=node_exporter_user
         ExecStart=/usr/local/bin/node_exporter
-        Restart=on-failure
-        RestartSec=5s
-
-        [Install]
-        WantedBy=multi-user.target
-
-    # Install and start prometheus
-    - name: prometheus-install.service
-      enabled: true
-      contents: |
-        [Unit]
-        Description=Install Prometheus
-        After=network-online.target
-        Wants=network-online.target
-        Before=prometheus.service
-
-        [Service]
-        Type=oneshot
-        ExecStart=/bin/sh -c 'set -x; cd /tmp; /usr/bin/curl -sfL -LO https://github.com/prometheus/prometheus/releases/download/v2.33.0/prometheus-2.33.0.linux-amd64.tar.gz && tar xvfz prometheus-2.33.0.linux-amd64.tar.gz && cp prometheus-2.33.0.linux-amd64/prometheus /usr/local/bin/prometheus && cp -r prometheus-2.33.0.linux-amd64/consoles /etc/prometheus/ && cp -r prometheus-2.33.0.linux-amd64/console_libraries /etc/prometheus/ && rm -rf prometheus-2.33.0.linux-amd64*'
-        RemainAfterExit=true
-
-        [Install]
-        WantedBy=multi-user.target
-    - name: prometheus.service
-      enabled: true
-      contents: |
-        [Unit]
-        Description=Prometheus Server
-        After=network-online.target
-        Wants=network-online.target
-        Requires=prometheus-install.service
-
-        [Service]
-        Type=simple
-        User=monitoring_user
-        ExecStart=/usr/local/bin/prometheus --config.file=/etc/prometheus/config.yml
         Restart=on-failure
         RestartSec=5s
 
@@ -168,24 +116,86 @@ systemd:
         [Service]
         Type=simple
         User=k3s_user
-        ExecStart=/usr/local/bin/k3s server
+        ExecStart=/usr/local/bin/k3s server --config /etc/rancher/k3s/config.yaml
         Restart=on-failure
         RestartSec=5s
 
         [Install]
         WantedBy=multi-user.target
+
+    # Install the metrics server for k3s (required for autoscaling)
     - name: k3s-install-metrics-server.service
       enabled: true
       contents: |
         [Unit]
-        Description=Install k3s
+        Description=Install k3s metrics server
         After=network-online.target
         Requires=k3s.service
 
         [Service]
         Type=oneshot
-        User=k3s_user
-        ExecStart=/bin/sh -c 'kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml | sh'
+        ExecStart=/bin/sh -c '\
+          kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml | sh'
+        RemainAfterExit=true
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # Install longhorn for k3s (persistent storage)
+    - name: k3s-install-longhorn.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install Longhorn
+        After=k3s.service
+        Requires=k3s.service
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/sh -c '\
+          kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/master/deploy/longhorn.yaml && \
+          sleep 60 && \
+          kubectl apply -f /etc/rancher/k3s/longhorn-config.yaml && \
+          kubectl apply -f /etc/rancher/k3s/longhorn-node-config.yaml'
+        RemainAfterExit=true
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # Install the vertical pod autoscaler for k3s
+    - name: k3s-install-vertical-pod-autoscaler.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install Vertical Pod Autoscaler
+        After=k3s.service
+        Requires=k3s.service
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/sh -c '\
+          git clone https://github.com/kubernetes/autoscaler.git && \
+          cd autoscaler/vertical-pod-autoscaler/ && \
+          ./hack/vpa-up.sh'
+        RemainAfterExit=true
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # Install the Rancher Dashboard for k3s
+    - name: k3s-install-rancher-dashboard.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Deploy Rancher Dashboard
+        After=k3s.service
+        Requires=k3s.service
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/sh -c '\
+          kubectl create namespace cattle-system && \
+          kubectl apply -f https://raw.githubusercontent.com/rancher/rancher/latest/manifest-rancher.yaml -n cattle-system'
         RemainAfterExit=true
 
         [Install]
@@ -212,15 +222,36 @@ systemd:
 # Storage configuration
 storage:
   disks:
+    # Configure the main hard drive for the operating system
     - device: /dev/disk/by-id/coreos-boot-disk
       wipe_table: false
       partitions:
-      - number: 4
+      - number: 4 # This is the root partition where the OS is installed
         label: root
         size_mib: 32768 # At least 8192
         resize: true
-      - size_mib: 0
+      - size_mib: 0 # This is the var partition, which will take up the rest of the disk
         label: var
+    
+    # Configure additional hard drives for Longhorn to use as storage
+    - device: /dev/sda
+      wipe_table: true
+      label: sda-ssd-2tb
+    - device: /dev/sdb
+      wipe_table: true
+      label: sdb-ssd-2tb
+    - device: /dev/sdc
+      wipe_table: true
+      label: sdc-hdd-4tb
+    - device: /dev/sdd
+      wipe_table: true
+      label: sdd-hdd-4tb
+    - device: /dev/sde
+      wipe_table: true
+      label: sde-ssd-1tb
+    - device: /dev/sdf
+      wipe_table: true
+      label: sdf-ssd-1tb
 
   # Configure file systems and mount them on the previously configured hard drives
   filesystems:
@@ -230,25 +261,13 @@ storage:
       wipe_filesystem: true
       with_mount_unit: true
 
-  # Create working directories
-  # directories:
-    # - path: /var/...
+  # Create directories if needed
+  directories:
+    - path: /var/longhorn
   
-  # Create configuration files
-  files:
-    # Configure RAID modules
-    - path: /etc/modules-load.d/raid.conf
-      contents:
-        inline: |
-            raid0
-            raid1
-            raid10
-            raid456
-      mode: 0644
-      user:
-        name: root
-    
-    # Setup configuration file for zincati
+  # Create files
+  files:    
+    # Config file for zincati
     - path: /etc/zincati/config.d/90-custom.toml
       overwrite: true
       contents:
@@ -265,22 +284,138 @@ storage:
       mode: 0644
       user:
         name: root
-    
-    # Setup configuration file for prometheus
-    - path: /etc/prometheus/config.yml
+      group:
+        name: root
+
+    # Config file for k3s
+    - path: /etc/rancher/k3s/config.yaml
       overwrite: true
       contents:
         inline: |
-          global:
-            scrape_interval: 30s
-
-          scrape_configs:
-            - job_name: node
-              static_configs:
-                - targets: ['localhost:9100']
-            - job_name: 'kube-state-metrics'
-              static_configs:
-                - targets: ['localhost:30001']
+          node-name: k3s-server
+          tls-san:
+            - YOUR_IP_DOMAIN_GOES_HERE
+          kube-apiserver-arg:
+            - "allow-privileged=true"
+          kubelet-arg:
+            - "max-pods=64"
+          cluster-cidr: "10.42.0.0/16"
+          service-cidr: "10.43.0.0/16"
+          cluster-dns: "10.43.0.10"
       mode: 0644
       user:
-        name: monitoring_user
+        name: root
+      group:
+        name: root
+
+    # Config file for longhorn
+    - path: /etc/rancher/k3s/longhorn-config.yaml
+      overwrite: true
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: longhorn-storageclass
+            namespace: longhorn-system
+          data:
+            storageclass.yaml: |
+              kind: StorageClass
+              apiVersion: storage.k8s.io/v1
+              metadata:
+                name: longhorn-ssd
+              provisioner: driver.longhorn.io
+              parameters:
+                numberOfReplicas: "2"
+                staleReplicaTimeout: "2880"
+                fromBackup: ""
+                diskSelector: "ssd"
+              allowVolumeExpansion: true
+            default-setting.yaml: |
+              apiVersion: longhorn.io/v1beta2
+              kind: Setting
+              metadata:
+                name: default-setting
+                namespace: longhorn-system
+              spec:
+                default-data-path: /var/longhorn
+                default-data-locality: disabled
+                replica-soft-anti-affinity: false
+                storage-minimal-available-percentage: "25"
+                upgrade-checker: false
+                default-replica-count: 2
+                guaranteed-instance-manager-cpu: 20
+                default-longhorn-static-storage-class: longhorn-ssd
+                backup-target: s3://your-backup-bucket@region/
+                backup-target-credential-secret: longhorn-backup-secret
+                create-default-disk-labeled-nodes: true
+                node-down-pod-deletion-policy: delete-both-statefulset-and-deployment-pod
+      mode: 0644
+      user:
+        name: root
+      group:
+        name: root
+
+    # Config file for longhorn node
+    - path: /etc/rancher/k3s/longhorn-node-config.yaml
+      overwrite: true
+      contents:
+        inline: |
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: longhorn-node-config
+            namespace: longhorn-system
+          data:
+            node-config.yaml: |
+              kind: ConfigMap
+              apiVersion: v1
+              metadata:
+                name: node-config
+                namespace: longhorn-system
+              data:
+                default-data-path: "/var/longhorn/"
+                nodes:
+                  k3s-server:
+                    disks:
+                      sda-ssd-2tb:
+                        path: /dev/sda
+                        allowScheduling: true
+                        storageReserved: 10Gi
+                        tags:
+                          - ssd
+                      sdb-ssd-2tb:
+                        path: /dev/sdb
+                        allowScheduling: true
+                        storageReserved: 10Gi
+                        tags:
+                          - ssd
+                      sdc-hdd-4tb:
+                        path: /dev/sdc
+                        allowScheduling: true
+                        storageReserved: 10Gi
+                        tags:
+                          - hdd
+                      sdd-hdd-4tb:
+                        path: /dev/sdd
+                        allowScheduling: true
+                        storageReserved: 10Gi
+                        tags:
+                          - hdd
+                      sde-ssd-1tb:
+                        path: /dev/sde
+                        allowScheduling: true
+                        storageReserved: 10Gi
+                        tags:
+                          - ssd
+                      sdf-ssd-1tb:
+                        path: /dev/sdf
+                        allowScheduling: true
+                        storageReserved: 10Gi
+                        tags:
+                          - ssd
+      mode: 0644
+      user:
+        name: root
+      group:
+        name: root
