@@ -155,8 +155,8 @@ systemd:
         ExecStart=/bin/sh -c '\
           kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/master/deploy/longhorn.yaml && \
           sleep 60 && \
-          kubectl apply -f /etc/rancher/k3s/longhorn-config.yaml && \
-          kubectl apply -f /etc/rancher/k3s/longhorn-node-config.yaml'
+          kubectl apply -f /etc/rancher/k3s/longhorn-node-config.yaml && \
+          kubectl apply -f /etc/rancher/k3s/longhorn-storageclass.yaml'
         RemainAfterExit=true
 
         [Install]
@@ -182,7 +182,7 @@ systemd:
         [Install]
         WantedBy=multi-user.target
 
-    # Install the Rancher Dashboard for k3s
+    # Install Rancher for k3s
     - name: k3s-install-rancher-dashboard.service
       enabled: true
       contents: |
@@ -195,7 +195,7 @@ systemd:
         Type=oneshot
         ExecStart=/bin/sh -c '\
           kubectl create namespace cattle-system && \
-          kubectl apply -f https://raw.githubusercontent.com/rancher/rancher/latest/manifest-rancher.yaml -n cattle-system'
+          helm install rancher rancher-latest/rancher --namespace cattle-system --set hostname=rancher.my.org'
         RemainAfterExit=true
 
         [Install]
@@ -368,52 +368,81 @@ storage:
             namespace: longhorn-system
           data:
             node-config.yaml: |
-              kind: ConfigMap
-              apiVersion: v1
-              metadata:
-                name: node-config
-                namespace: longhorn-system
-              data:
-                default-data-path: "/var/longhorn/"
-                nodes:
-                  k3s-server:
-                    disks:
-                      sda-ssd-2tb:
-                        path: /dev/sda
-                        allowScheduling: true
-                        storageReserved: 10Gi
-                        tags:
-                          - ssd
-                      sdb-ssd-2tb:
-                        path: /dev/sdb
-                        allowScheduling: true
-                        storageReserved: 10Gi
-                        tags:
-                          - ssd
-                      sdc-hdd-4tb:
-                        path: /dev/sdc
-                        allowScheduling: true
-                        storageReserved: 10Gi
-                        tags:
-                          - hdd
-                      sdd-hdd-4tb:
-                        path: /dev/sdd
-                        allowScheduling: true
-                        storageReserved: 10Gi
-                        tags:
-                          - hdd
-                      sde-ssd-1tb:
-                        path: /dev/sde
-                        allowScheduling: true
-                        storageReserved: 10Gi
-                        tags:
-                          - ssd
-                      sdf-ssd-1tb:
-                        path: /dev/sdf
-                        allowScheduling: true
-                        storageReserved: 10Gi
-                        tags:
-                          - ssd
+              nodes:
+                - address: k3s-server
+                  allowScheduling: true
+                  instance-manager-cpu-request: 0.1
+                  instance-manager-cpu-limit: 0.5
+                  tags:
+                    - ssd
+                    - hdd
+                  disks:
+                    sda-ssd-2tb:
+                      path: /dev/sda
+                      allowScheduling: true
+                      storageReserved: 10Gi
+                      tags:
+                        - ssd
+                    sdb-ssd-2tb:
+                      path: /dev/sdb
+                      allowScheduling: true
+                      storageReserved: 10Gi
+                      tags:
+                        - ssd
+                    sdc-hdd-4tb:
+                      path: /dev/sdc
+                      allowScheduling: true
+                      storageReserved: 20Gi
+                      tags:
+                        - hdd
+                    sdd-hdd-4tb:
+                      path: /dev/sdd
+                      allowScheduling: true
+                      storageReserved: 20Gi
+                      tags:
+                        - hdd
+                    sde-ssd-1tb:
+                      path: /dev/sde
+                      allowScheduling: true
+                      storageReserved: 5Gi
+                      tags:
+                        - ssd
+                    sdf-ssd-1tb:
+                      path: /dev/sdf
+                      allowScheduling: true
+                      storageReserved: 5Gi
+                      tags:
+                        - ssd
+      mode: 0644
+      user:
+        name: root
+      group:
+        name: root
+
+    # Config file for Longhorn storage classes
+    - path: /etc/rancher/k3s/longhorn-storageclass.yaml
+      overwrite: true
+      contents:
+        inline: |
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: longhorn-ssd
+          provisioner: driver.longhorn.io
+          parameters:
+            numberOfReplicas: "2"
+            dataLocality: "best-effort"
+            nodeSelector: "ssd"
+          ---
+          apiVersion: storage.k8s.io/v1
+          kind: StorageClass
+          metadata:
+            name: longhorn-hdd
+          provisioner: driver.longhorn.io
+          parameters:
+            numberOfReplicas: "2"
+            dataLocality: "best-effort"
+            nodeSelector: "hdd"
       mode: 0644
       user:
         name: root
