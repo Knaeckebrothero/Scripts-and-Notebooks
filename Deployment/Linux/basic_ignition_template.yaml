@@ -14,6 +14,8 @@ passwd:
     # Additional service users
     - name: node_exporter_user
       system: true
+    - name: k3s_user
+      system: true
 
 # System services configuration
 systemd:
@@ -58,7 +60,11 @@ systemd:
 
         [Service]
         Type=oneshot
-        ExecStart=/bin/sh -c 'set -x; cd /tmp; /usr/bin/curl -sfL -LO https://github.com/prometheus/node_exporter/releases/download/v1.8.0/node_exporter-1.8.0.linux-amd64.tar.gz && tar xvfz node_exporter-1.8.0.linux-amd64.tar.gz && cp node_exporter-1.8.0.linux-amd64/node_exporter /usr/local/bin/node_exporter && rm -rf node_exporter-1.8.0.linux-amd64*'
+        ExecStart=/bin/sh -c '\
+          set -x; cd /tmp; /usr/bin/curl -sfL -LO https://github.com/prometheus/node_exporter/releases/download/v1.8.0/node_exporter-1.8.0.linux-amd64.tar.gz && \
+          tar xvfz node_exporter-1.8.0.linux-amd64.tar.gz && \
+          cp node_exporter-1.8.0.linux-amd64/node_exporter /usr/local/bin/node_exporter && \
+          rm -rf node_exporter-1.8.0.linux-amd64*'
         RemainAfterExit=true
 
         [Install]
@@ -75,6 +81,42 @@ systemd:
         Type=simple
         User=node_exporter_user
         ExecStart=/usr/local/bin/node_exporter
+        Restart=on-failure
+        RestartSec=5s
+
+        [Install]
+        WantedBy=multi-user.target
+
+    # Install and start Kubernetes
+    - name: k3s-install.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Install k3s
+        After=network-online.target
+        Requires=network-online.target
+        Before=k3s.service
+
+        [Service]
+        Type=oneshot
+        ExecStart=/bin/sh -c '/usr/bin/curl -sfL https://get.k3s.io | sh'
+        RemainAfterExit=true
+
+        [Install]
+        WantedBy=multi-user.target
+    - name: k3s.service
+      enabled: true
+      contents: |
+        [Unit]
+        Description=Lightweight Kubernetes
+        After=network-online.target
+        Wants=network-online.target
+        Requires=k3s-install.service
+
+        [Service]
+        Type=simple
+        User=k3s_user
+        ExecStart=/usr/local/bin/k3s server --cluster-init
         Restart=on-failure
         RestartSec=5s
 
@@ -112,6 +154,20 @@ storage:
         resize: true
       - size_mib: 0 # This is the var partition, which will take up the rest of the disk
         label: var
+    
+    # Configure additional hard drives for Longhorn to use as storage
+    - device: /dev/sda
+      wipe_table: true
+    - device: /dev/sdb
+      wipe_table: true
+    - device: /dev/sdc
+      wipe_table: true
+    - device: /dev/sdd
+      wipe_table: true
+    - device: /dev/sde
+      wipe_table: true
+    - device: /dev/sdf
+      wipe_table: true
 
   # Configure file systems and mount them on the previously configured hard drives
   filesystems:
@@ -120,16 +176,19 @@ storage:
       format: ext4
       wipe_filesystem: true
       with_mount_unit: true
-
-  # Create directories if needed
-  # directories:
-    # - path: /var/...
   
   # Create files
-  files:    
+  files:
+    # Set the hostname
+    - path: /etc/hostname
+      mode: 0644
+      contents:
+        inline: master-node
+
     # Config file for zincati
     - path: /etc/zincati/config.d/90-custom.toml
       overwrite: true
+      mode: 0644
       contents:
         inline: |
           [updates]
@@ -141,6 +200,3 @@ storage:
 
           [reboot]
           strategy = "off" # Disable reboot, since server reboots on daily basis anyway
-      mode: 0644
-      user:
-        name: root
