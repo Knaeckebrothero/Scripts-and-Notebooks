@@ -14,12 +14,16 @@ passwd:
     # Additional service users
     - name: node_exporter_user
       system: true
-    - name: k3s_user
-      system: true
 
 # System services configuration
 systemd:
   units:
+    # Disable cloud-init services
+    - name: nm-cloud-setup.service
+      mask: true
+    - name: nm-cloud-setup.timer
+      mask: true
+
     # Setup daily reboot timer (reboots at 03:00 every day, gmt timezone)
     - name: daily-restart.timer
       enabled: true
@@ -33,6 +37,8 @@ systemd:
 
         [Install]
         WantedBy=multi-user.target
+
+    # Setup a service that get's triggered by the timer to reboot the system
     - name: daily-restart.service
       enabled: true
       contents: |
@@ -44,11 +50,9 @@ systemd:
         ExecStart=/usr/bin/systemctl reboot
 
         [Install]
-        # This line is commented out to prevent the service from starting at boot
-        # WantedBy=multi-user.target
         WantedBy=timer.target
 
-    # Install and start node exporter
+    # Install a node exporter for prometheus monitoring
     - name: node-exporter-install.service
       enabled: true
       contents: |
@@ -69,6 +73,8 @@ systemd:
 
         [Install]
         WantedBy=multi-user.target
+
+    # Setup a service to start the node exporter
     - name: node-exporter.service
       enabled: true
       contents: |
@@ -87,38 +93,26 @@ systemd:
         [Install]
         WantedBy=multi-user.target
 
-    # Install and start Kubernetes
+    # Install and configure kubernetes
     - name: k3s-install.service
       enabled: true
       contents: |
         [Unit]
         Description=Install k3s
         After=network-online.target
-        Requires=network-online.target
-        Before=k3s.service
+        Wants=network-online.target
 
         [Service]
         Type=oneshot
-        ExecStart=/bin/sh -c '/usr/bin/curl -sfL https://get.k3s.io | sh'
+        # Use this for the first server node
+        Environment="INSTALL_K3S_EXEC=server --cluster-init --tls-san SERVER_NODE_1_IP,SERVER_NODE_2_IP,SERVER_NODE_3_IP"
+        
+        # Use this for additional server nodes (comment out the above line and uncomment these for additional nodes)
+        #Environment="INSTALL_K3S_EXEC=server --server https://SERVER_NODE_1_IP:6443"
+        #Environment="K3S_TOKEN=YOUR_NODE_TOKEN"
+
+        ExecStart=/bin/sh -c 'curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="$INSTALL_K3S_EXEC" K3S_TOKEN="$K3S_TOKEN" sh -s - --write-kubeconfig-mode 644'
         RemainAfterExit=true
-
-        [Install]
-        WantedBy=multi-user.target
-    - name: k3s.service
-      enabled: true
-      contents: |
-        [Unit]
-        Description=Lightweight Kubernetes
-        After=network-online.target
-        Wants=network-online.target
-        Requires=k3s-install.service
-
-        [Service]
-        Type=simple
-        User=k3s_user
-        ExecStart=/usr/local/bin/k3s server --cluster-init
-        Restart=on-failure
-        RestartSec=5s
 
         [Install]
         WantedBy=multi-user.target
@@ -158,32 +152,93 @@ storage:
     # Configure additional hard drives for Longhorn to use as storage
     - device: /dev/sda
       wipe_table: true
+      partitions:
+      - size_mib: 0
+        start_mib: 0
+        label: sda-ssd-2000
     - device: /dev/sdb
       wipe_table: true
+      partitions:
+      - size_mib: 0
+        start_mib: 0
+        label: sdb-ssd-2000
     - device: /dev/sdc
       wipe_table: true
+      partitions:
+      - size_mib: 0
+        start_mib: 0
+        label: sdc-hdd-4000
     - device: /dev/sdd
       wipe_table: true
+      partitions:
+      - size_mib: 0
+        start_mib: 0
+        label: sdd-hdd-4000
     - device: /dev/sde
       wipe_table: true
+      partitions:
+      - size_mib: 0
+        start_mib: 0
+        label: sde-ssd-1000
     - device: /dev/sdf
       wipe_table: true
+      - size_mib: 0
+        start_mib: 0
+        label: sdf-ssd-1000
 
   # Configure file systems and mount them on the previously configured hard drives
   filesystems:
+    # Mount the root partition
     - path: /var
       device: /dev/disk/by-partlabel/var
       format: ext4
       wipe_filesystem: true
       with_mount_unit: true
   
+    # Mount the additional hard drives
+    - path: /var/longhorn/sda-ssd-2000
+      device: /dev/disk/by-partlabel/sda-ssd-2000
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+    - path: /var/longhorn/sdb-ssd-2000
+      device: /dev/disk/by-partlabel/sdb-ssd-2000
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+    - path: /var/longhorn/sdc-hdd-4000
+      device: /dev/disk/by-partlabel/sdc-hdd-4000
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+    - path: /var/longhorn/sdd-hdd-4000
+      device: /dev/disk/by-partlabel/sdd-hdd-4000
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+    - path: /var/longhorn/sde-ssd-1000
+      device: /dev/disk/by-partlabel/sde-ssd-1000
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+    - path: /var/longhorn/sdf-ssd-1000
+      device: /dev/disk/by-partlabel/sdf-ssd-1000
+      format: ext4
+      wipe_filesystem: true
+      with_mount_unit: true
+  
+  # Create directories
+  directories:
+    - path: /var/longhorn
+      mode: 0755
+
   # Create files
   files:
     # Set the hostname
     - path: /etc/hostname
       mode: 0644
       contents:
-        inline: master-node
+        inline: worker-node-1
 
     # Config file for zincati
     - path: /etc/zincati/config.d/90-custom.toml
