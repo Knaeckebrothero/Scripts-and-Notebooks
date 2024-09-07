@@ -112,7 +112,6 @@ systemd:
         #Environment="K3S_TOKEN=YOUR_NODE_TOKEN"
 
         ExecStart=/bin/sh -c 'curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="$INSTALL_K3S_EXEC" K3S_TOKEN="$K3S_TOKEN" sh -s - --write-kubeconfig-mode 644'
-        RemainAfterExit=true
 
         [Install]
         WantedBy=multi-user.target
@@ -196,32 +195,32 @@ storage:
       with_mount_unit: true
   
     # Mount the additional hard drives
-    - path: /var/longhorn/sda-ssd-2000
+    - path: /var/lib/longhorn/sda-ssd-2000
       device: /dev/disk/by-partlabel/sda-ssd-2000
       format: ext4
       wipe_filesystem: true
       with_mount_unit: true
-    - path: /var/longhorn/sdb-ssd-2000
+    - path: /var/lib/longhorn/sdb-ssd-2000
       device: /dev/disk/by-partlabel/sdb-ssd-2000
       format: ext4
       wipe_filesystem: true
       with_mount_unit: true
-    - path: /var/longhorn/sdc-hdd-4000
+    - path: /var/lib/longhorn/sdc-hdd-4000
       device: /dev/disk/by-partlabel/sdc-hdd-4000
       format: ext4
       wipe_filesystem: true
       with_mount_unit: true
-    - path: /var/longhorn/sdd-hdd-4000
+    - path: /var/lib/longhorn/sdd-hdd-4000
       device: /dev/disk/by-partlabel/sdd-hdd-4000
       format: ext4
       wipe_filesystem: true
       with_mount_unit: true
-    - path: /var/longhorn/sde-ssd-1000
+    - path: /var/lib/longhorn/sde-ssd-1000
       device: /dev/disk/by-partlabel/sde-ssd-1000
       format: ext4
       wipe_filesystem: true
       with_mount_unit: true
-    - path: /var/longhorn/sdf-ssd-1000
+    - path: /var/lib/longhorn/sdf-ssd-1000
       device: /dev/disk/by-partlabel/sdf-ssd-1000
       format: ext4
       wipe_filesystem: true
@@ -229,7 +228,7 @@ storage:
   
   # Create directories
   directories:
-    - path: /var/longhorn
+    - path: /var/lib/longhorn
       mode: 0755
 
   # Create files
