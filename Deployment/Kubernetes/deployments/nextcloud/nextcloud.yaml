@@ -1,5 +1,8 @@
 # K3s Kubernetes Deployment for Nextcloud
 # https://nextcloud.com/
+# https://hub.docker.com/_/nextcloud
+# https://github.com/docker-library/docs/blob/master/nextcloud/README.md
+
 
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -12,7 +15,7 @@ spec:
   storageClassName: longhorn
   resources:
     requests:
-      storage: 512Gi
+      storage: 1024Gi
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
