@@ -63,8 +63,8 @@ spec:
           name: postgres-nextcloud
         volumeMounts:
         - name: postgres-nextcloud
-             mountPath: /config
+          mountPath: /config
       volumes:
-      - name: postgres-nextcloud
-         persistentVolumeClaim:
-          claimName: longhorn-postgres-nextcloud-pvc
+      - name: "postgres-nextcloud"
+        persistentVolumeClaim:
+        claimName: longhorn-postgres-nextcloud-pvc
