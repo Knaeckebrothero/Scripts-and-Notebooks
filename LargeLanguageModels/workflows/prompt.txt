@@ -1,0 +1,10 @@
+Analyze the following document content and extract relevant tags and metadata.
+
+Document content: {content}
+
+{format_instructions}
+
+Generate tags that capture the key topics, themes, and concepts in the document.
+Each tag should have a confidence score indicating how relevant it is to the document.
+
+Provide your response in the exact JSON format specified above.
