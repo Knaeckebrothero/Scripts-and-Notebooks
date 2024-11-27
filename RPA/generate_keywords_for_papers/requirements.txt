@@ -1,0 +1,5 @@
+python-dotenv
+pydantic<2.0
+langchain
+langchain_community
+pdfplumber
