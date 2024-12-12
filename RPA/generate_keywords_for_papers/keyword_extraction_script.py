@@ -13,13 +13,17 @@ from langchain_community.document_loaders import PDFPlumberLoader
 
 # Data model representing a single keyword with a description.
 class Keyword(BaseModel):
-    keyword: str = Field(description="The keyword or search term it self")
-    description: str = Field(description="A brief description of the keyword or search term")
+    keyword: str = Field(description="The keyword or search term it self.")
+    synonym: str = Field(description="The keyword or search term this is a synonym for (can be the same as keyword for new keywords).")
+    broad_or_related: bool = Field(description="Whether the keyword is a broad term or directly related to the synonym.")
+    description: str = Field(description="A brief description of the keyword or search term.")
 
     # Convert the Keyword instance to a dictionary.
     def to_dict(self):
         return {
             "keyword": self.keyword,
+            "synonym": self.synonym,
+            "broad_or_related": self.broad_or_related,
             "description": self.description
         }
 
@@ -28,10 +32,10 @@ class Keyword(BaseModel):
 class PageKeywords(BaseModel):
     keywords: List[Keyword] = Field(description="List of relevant keywords for the document")
 
-    # Convert the PageKeywords instance to a dictionary.
+    # ConverPage instance to a dictionary.
     def to_dict(self):
         return {
-            "tags": [tag.to_dict() for tag in self.tags]
+            "keywords": [tag.to_dict() for tag in self.tags]
         }
 
 
@@ -44,7 +48,7 @@ keywords = []
 llm_model = ChatOpenAI(
     model=model_name,
     temperature=0,
-    seed=42,
+    seed=1234567890,
     n=1,
 )
 
@@ -52,12 +56,12 @@ with open("prompt.txt", "r") as f:
     template = f.read()
 
 # Initialize the output parser
-parser = PydanticOutputParser(pydantic_object=PageKeywords)
+parser = PydanticOutputParser(pydantic_oPage)
 
 # Assemble the prompt
 prompt = PromptTemplate(
     template=template,
-    input_variables=["page_content"],
+    input_variables=["metadata", "page_content"],
     partial_variables={"format_instructions": parser.get_format_instructions()}
 )
 
@@ -67,10 +71,13 @@ chain = prompt | llm_model | parser
 loader = PDFPlumberLoader("./papers/Neuro-SymbolicArtificialIntelligence.pdf")
 docs = loader.load()
 
+# TODO: Find a way to extract the metadata
+metadata = ""
+
 # Process the document and generate keywords for each page
 for i, page_content in enumerate(docs):
     # Run the chain
-    result = chain.invoke({"page_content": page_content})
+    result = chain.invoke({"metadata": metadata, "page_content": page_content})
 
     # Convert the result to a dictionary and append to keywords
     page_data = {
@@ -88,3 +95,5 @@ try:
     print("Keywords successfully saved to keywords.json")
 except Exception as e:
     print(f"Error saving keywords: {str(e)}")
+
+# TODO: Store the keywords in a database instead

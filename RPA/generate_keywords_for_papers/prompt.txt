@@ -2,6 +2,8 @@ You are a research Assistant specializing in extracting keywords and other searc
 
 Please analyze the following page and extract relevant keywords.
 
+Metadata: {metadata}
+
 Content: {page_content}
 
 Instructions: {format_instructions}
