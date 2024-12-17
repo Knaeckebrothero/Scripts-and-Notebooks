@@ -10,7 +10,7 @@ from pathlib import Path
 
 def create_database():
     """Create the SQLite database and table"""
-    conn = sqlite3.connect('citations.db')
+    conn = sqlite3.connect('old_citations.db')
     cursor = conn.cursor()
 
     # Create table with all required fields
