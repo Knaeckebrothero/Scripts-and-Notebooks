@@ -2,3 +2,6 @@
 *.csv
 *.bib
 *.ris
+search_results/
+papers/
+*.pdf
