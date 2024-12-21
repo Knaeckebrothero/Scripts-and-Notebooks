@@ -126,21 +126,39 @@ class PDFProcessor:
                 doi = doi[len(prefix):]
         print(f"After prefix removal: {doi}")
 
-        # Find potential DOIs with length validation
-        # Pattern explanations:
-        # ACM pattern: 10.1145/XXXXXXX.XXXXXXX (7 digits each)
-        # General pattern: 10.XXXX/any numbers with exactly one dot
-        patterns = [
-            r'10\.1145/\d{7}\.\d{7}\b',  # ACM specific
-            r'10\.\d{4}/\d+\.\d+\b'       # General pattern with word boundary
-        ]
+        # Find potential DOIs and standardize them
+        # First try exact ACM pattern
+        acm_pattern = r'10\.1145/\d{7}\.\d{7}\b'
+        matches = re.finditer(acm_pattern, doi)
+        dois = [match.group(0) for match in matches]
+        if dois:
+            print(f"Found exact ACM DOI: {dois[0]}")
+            return dois[0]
 
-        for pattern in patterns:
-            matches = re.finditer(pattern, doi)
-            dois = [match.group(0) for match in matches]
-            if dois:
-                print(f"Found DOIs with pattern {pattern}: {dois}")
-                return dois[0]
+        # If no exact match, try general pattern and trim
+        general_pattern = r'10\.\d{4}/\d+\.\d+'
+        matches = re.finditer(general_pattern, doi)
+        dois = [match.group(0) for match in matches]
+        if dois:
+            # Take first match and standardize it
+            raw_doi = dois[0]
+            print(f"Found raw DOI: {raw_doi}")
+
+            # Split into parts and standardize
+            try:
+                prefix, numbers = raw_doi.split('/')
+                base, suffix = numbers.split('.')
+                # For ACM DOIs, ensure exactly 7 digits in each part
+                if prefix == '10.1145':
+                    base = base[:7]  # Take first 7 digits
+                    suffix = suffix[:7]  # Take first 7 digits
+                    standardized = f"{prefix}/{base}.{suffix}"
+                    print(f"Standardized DOI: {standardized}")
+                    return standardized
+                return raw_doi
+            except Exception as e:
+                print(f"Error standardizing DOI: {e}")
+                return None
 
         return None
 
