@@ -6,3 +6,6 @@ pypdf2
 python-dotenv
 langchain_community
 pypdf
+streamlit
+pandas
+plotly
