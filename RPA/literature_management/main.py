@@ -3,12 +3,12 @@ Script to process citation files from various sources and consolidate them into 
 Supports BibTeX, IEEE CSV, Springer CSV, DBLP CSV, and ProQuest CSV formats.
 Papers with DOIs go to the main 'papers' table, those without to 'papers_no_doi'.
 """
+
 import bibtexparser
 import sqlite3
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Set, Tuple
-
 
 class CitationProcessor:
     def __init__(self, db_name: str = 'citations.db'):
@@ -62,11 +62,35 @@ class CitationProcessor:
         if self.conn:
             self.conn.close()
 
+    def _standardize_doi(self, doi: str) -> str:
+        """Standardize DOI format by removing common prefixes"""
+        if not doi:
+            return ''
+
+        # Remove common prefixes and whitespace
+        doi = doi.strip()
+        prefixes = [
+            'https://doi.org/',
+            'http://doi.org/',
+            'doi.org/',
+            'DOI: ',
+            'doi:',
+            'DOI:'
+        ]
+
+        for prefix in prefixes:
+            if doi.lower().startswith(prefix.lower()):
+                doi = doi[len(prefix):]
+                break
+
+        return doi.strip()
+
     def _insert_paper(self, paper_data: Dict) -> str:
         """Insert a paper into the appropriate table"""
         cursor = self.conn.cursor()
 
-        doi = paper_data.get('doi', '').strip()
+        # Standardize DOI format
+        doi = self._standardize_doi(paper_data.get('doi', ''))
         title = paper_data.get('title', '').strip()
         authors = paper_data.get('authors', '').strip()
 
@@ -288,13 +312,13 @@ def main():
     file_config = {
         'bibtex': [
             search_dir / 'acm.bib',
-            search_dir / 'ScienceDirect.bib',
-            search_dir / 'wiley.bib'
+            search_dir / 'ScienceDirect_1.bib',
+            search_dir / 'ScienceDirect_2.bib',
+            search_dir / 'wiley_1.bib',
+            search_dir / 'wiley_2.bib'
         ],
         'ieee': [search_dir / 'ieee.csv'],
-        'springer': [search_dir / 'SpringerLink.csv'],
-        'dblp': [search_dir / 'dblp.csv'],
-        'proquest': [search_dir / 'ProQuest.csv']
+        'springer': [search_dir / 'SpringerLink.csv']
     }
 
     processor = CitationProcessor()
