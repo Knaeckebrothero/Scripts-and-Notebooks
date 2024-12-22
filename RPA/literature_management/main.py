@@ -1,16 +1,20 @@
 """
-This is the main script
+This is the main script for the literature management application.
+It provides a streamlit interface to import citations, process papers, and view the database.
 """
 import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
 from pathlib import Path
+from process_papers import process_papers
+from import_paper_citations import import_citations
 
 
 @st.cache_resource
 def get_connection():
-    return sqlite3.connect('citations.db', check_same_thread=False)
+    return sqlite3.connect('literature.db', check_same_thread=False)
+
 
 def load_data(query):
     conn = get_connection()
@@ -26,19 +30,22 @@ def load_data(query):
 
 
 if __name__ == "__main__":
-    # Set page title and layout
     st.set_page_config(
-        page_title="Literature Review Dashboard",
-        layout="wide")
-
-    # Sidebar for page selection
-    page = st.sidebar.selectbox(
-        "Select Page",
-        ["Papers with DOI", "Papers without DOI", "Paper Assessments"]
+        page_title="Literature Dashboard",
+        initial_sidebar_state="collapsed",
+        layout="wide"
     )
 
-    # Insert containers
-    papers_tab, papers_no_doi_tab, assessments_tab = st.tabs(["Papers", "No Doi", "Assessments"])
+    with st.sidebar:
+        if st.button("Import Citations"):
+            with st.spinner("Importing citations..."):
+                import_citations()
+
+        if st.button("Process Papers"):
+            with st.spinner("Processing papers..."):
+                process_papers()
+
+    papers_tab, assessments_tab = st.tabs(["Papers", "Assessments"])
 
     # Add CSS for better styling
     st.markdown("""
@@ -55,10 +62,21 @@ if __name__ == "__main__":
         """, unsafe_allow_html=True)
 
     with papers_tab:
-        st.title("Papers with DOI")
+        st.title("Papers")
 
-        # Load data
-        papers_df = load_data("SELECT * FROM papers")
+        try:
+            if st.checkbox("Include without doi"):
+                papers_df = load_data("""SELECT * FROM papers UNION SELECT * FROM papers_no_doi""")
+            else:
+                papers_df = load_data("SELECT * FROM papers")
+        except sqlite3.OperationalError:
+            st.error("Please import citations first!")
+
+            if st.button("Import Citations"):
+                with st.spinner("Importing citations..."):
+                    import_citations()
+
+            st.stop()
 
         # Basic statistics
         col1, col2, col3 = st.columns(3)
@@ -87,41 +105,23 @@ if __name__ == "__main__":
         st.subheader("Papers Database")
         st.dataframe(papers_df)
 
-    with papers_no_doi_tab:
-        st.title("Papers without DOI")
-
-        # Load data
-        papers_no_doi_df = load_data("SELECT * FROM papers_no_doi")
-
-        # Basic statistics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Papers", len(papers_no_doi_df))
-        with col2:
-            st.metric("Unique Venues", papers_no_doi_df['venue'].nunique())
-        with col3:
-            st.metric("Year Range", f"{papers_no_doi_df['publication_year'].min()}-{papers_no_doi_df['publication_year'].max()}")
-
-        # Publications per year
-        st.subheader("Publications per Year")
-        year_counts = papers_no_doi_df['publication_year'].value_counts().sort_index()
-        fig = px.bar(x=year_counts.index, y=year_counts.values)
-        fig.update_layout(xaxis_title="Year", yaxis_title="Number of Publications")
-        st.plotly_chart(fig)
-
-        # Interactive table
-        st.subheader("Papers Database (No DOI)")
-        st.dataframe(papers_no_doi_df)
-
     with assessments_tab:  # Paper Assessments
         st.title("Paper Assessments")
 
-        # Load data
-        assessments_df = load_data("""
-            SELECT a.*, p.title, p.authors, p.publication_year
-            FROM paper_assessments a
-            LEFT JOIN papers p ON a.paper_id = p.doi
-        """)
+        try:
+            assessments_df = load_data("""
+                SELECT a.*, p.title, p.authors, p.publication_year
+                FROM paper_assessments a
+                LEFT JOIN papers p ON a.paper_id = p.doi
+            """)
+        except sqlite3.OperationalError:
+            st.error("Please process papers first!")
+
+            if st.button("Process Papers"):
+                with st.spinner("Processing papers..."):
+                    process_papers()
+
+            st.stop()
 
         # Basic statistics
         col1, col2, col3 = st.columns(3)

@@ -7,7 +7,6 @@ import sqlite3
 from typing import List, Optional
 from datetime import datetime
 from pathlib import Path
-
 from dotenv import load_dotenv, find_dotenv
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
@@ -16,12 +15,16 @@ from langchain.output_parsers import PydanticOutputParser
 from langchain_community.document_loaders import PyPDFLoader
 import PyPDF2
 
+
 # Data model for paper assessment
 class PaperAssessment(BaseModel):
     """Assessment results for a research paper."""
+
+    # Whether the paper is primarily about neurosymbolic AI or not.
     is_neurosymbolic: bool = Field(
-        description="Whether the paper is primarily about neurosymbolic AI"
+        description="Whether the paper is primarily about neurosymbolic AI. "
     )
+
     key_development: bool = Field(
         description="Whether the paper presents a significant development in neurosymbolic AI"
     )
@@ -44,7 +47,7 @@ class PaperAssessment(BaseModel):
     )
 
 class PDFProcessor:
-    def __init__(self, db_path: str = 'citations.db'):
+    def __init__(self, db_path: str = 'literature.db'):
         """Initialize the PDF processor with database connection."""
         load_dotenv(find_dotenv())
 
@@ -325,9 +328,9 @@ class PDFProcessor:
         if self.conn:
             self.conn.close()
 
-
-processor = PDFProcessor()
-try:
-    processor.process_directory('papers')
-finally:
-    processor.close()
+def process_papers(directory_path: str = 'papers'):
+    processor = PDFProcessor()
+    try:
+        processor.process_directory(directory_path)
+    finally:
+        processor.close()

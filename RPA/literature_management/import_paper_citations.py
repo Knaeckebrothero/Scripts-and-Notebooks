@@ -3,16 +3,18 @@ Script to process citation files from various sources and consolidate them into 
 Supports BibTeX, IEEE CSV, Springer CSV, DBLP CSV, and ProQuest CSV formats.
 Papers with DOIs go to the main 'papers' table, those without to 'papers_no_doi'.
 """
-
 import bibtexparser
 import sqlite3
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Set, Tuple
 
+
 class CitationProcessor:
-    def __init__(self, db_name: str = 'citations.db'):
-        """Initialize the citation processor with database connection"""
+    def __init__(self, db_name: str = 'literature.db'):
+        """
+        Initialize the citation processor with database connection
+        """
         self.db_name = db_name
         self.processed_dois = set()
         self.processed_titles_authors = set()  # For checking duplicates in no_doi table
@@ -25,7 +27,7 @@ class CitationProcessor:
         cursor = self.conn.cursor()
 
         # Main table for papers with DOIs
-        cursor.execute('''
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS papers (
             doi TEXT PRIMARY KEY,
             title TEXT NOT NULL,
@@ -37,7 +39,7 @@ class CitationProcessor:
             download_link TEXT,
             source_file TEXT
         )
-        ''')
+        """)
 
         # Secondary table for papers without DOIs
         cursor.execute('''
@@ -303,22 +305,22 @@ class CitationProcessor:
         finally:
             self.close()
 
+def import_citations(citations_path: str = 'search_results'):
+    # Configure base path for search results
+    search_dir = Path(citations_path)
 
-# Configure base path for search results
-search_dir = Path('search_results')
+    # Configure files with relative paths
+    file_config = {
+        'bibtex': [
+            search_dir / 'acm.bib',
+            search_dir / 'ScienceDirect_1.bib',
+            search_dir / 'ScienceDirect_2.bib',
+            search_dir / 'wiley_1.bib',
+            search_dir / 'wiley_2.bib'
+        ],
+        'ieee': [search_dir / 'ieee.csv'],
+        'springer': [search_dir / 'SpringerLink.csv']
+    }
 
-# Configure files with relative paths
-file_config = {
-    'bibtex': [
-        search_dir / 'acm.bib',
-        search_dir / 'ScienceDirect_1.bib',
-        search_dir / 'ScienceDirect_2.bib',
-        search_dir / 'wiley_1.bib',
-        search_dir / 'wiley_2.bib'
-    ],
-    'ieee': [search_dir / 'ieee.csv'],
-    'springer': [search_dir / 'SpringerLink.csv']
-}
-
-processor = CitationProcessor()
-processor.process_files(file_config)
+    processor = CitationProcessor()
+    processor.process_files(file_config)

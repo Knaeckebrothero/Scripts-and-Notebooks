@@ -9,3 +9,4 @@ pypdf
 streamlit
 pandas
 plotly
+bibtexparser
