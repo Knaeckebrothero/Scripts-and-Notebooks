@@ -1,0 +1,7 @@
+Please analyze the following research paper content and provide a structured assessment.
+Focus on its relevance to neurosymbolic AI and its key developments.
+
+Paper content:
+{paper_content}
+
+{format_instructions}

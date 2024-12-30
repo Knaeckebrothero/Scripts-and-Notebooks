@@ -18,54 +18,23 @@ class CitationProcessor:
         self.db_name = db_name
         self.processed_dois = set()
         self.processed_titles_authors = set()  # For checking duplicates in no_doi table
-        self.conn = None
-        self.setup_database()
+        self.conn = sqlite3.connect(db_name)
 
-    def setup_database(self):
-        """Create the SQLite database and required tables"""
-        self.conn = sqlite3.connect(self.db_name)
-        cursor = self.conn.cursor()
 
-        # Main table for papers with DOIs
-        cursor.execute("""
-        CREATE TABLE IF NOT EXISTS papers (
-            doi TEXT PRIMARY KEY,
-            title TEXT NOT NULL,
-            publication_year INTEGER,
-            authors TEXT,
-            venue TEXT,
-            volume TEXT,
-            issue TEXT,
-            download_link TEXT,
-            source_file TEXT
-        )
-        """)
-
-        # Secondary table for papers without DOIs
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS papers_no_doi (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            publication_year INTEGER,
-            authors TEXT,
-            venue TEXT,
-            volume TEXT,
-            issue TEXT,
-            download_link TEXT,
-            source_file TEXT,
-            UNIQUE(title, authors)
-        )
-        ''')
-
-        self.conn.commit()
-
-    def close(self):
-        """Close database connection"""
+    def __del__(self):
         if self.conn:
             self.conn.close()
 
+
+    def close(self):
+        if self.conn:
+            self.conn.close()
+
+
     def _standardize_doi(self, doi: str) -> str:
-        """Standardize DOI format by removing common prefixes"""
+        """
+        Function to standardize the DOI format by removing common prefixes.
+        """
         if not doi:
             return ''
 
@@ -87,8 +56,11 @@ class CitationProcessor:
 
         return doi.strip()
 
+
     def _insert_paper(self, paper_data: Dict) -> str:
-        """Insert a paper into the appropriate table"""
+        """
+        Function to insert a paper into the appropriate table.
+        """
         cursor = self.conn.cursor()
 
         # Standardize DOI format

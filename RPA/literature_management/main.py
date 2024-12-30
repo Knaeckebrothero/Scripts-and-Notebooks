@@ -7,8 +7,9 @@ import pandas as pd
 import sqlite3
 import plotly.express as px
 from pathlib import Path
-from process_papers import process_papers
+from process_papers import PdfProcessor
 from import_paper_citations import import_citations
+from view_paper import papers_view
 
 
 @st.cache_resource
@@ -29,12 +30,70 @@ def load_data(query):
     return df
 
 
-if __name__ == "__main__":
+def setup_database(db_path: str = 'literature.db'):
+    """
+    Function to create the SQLite database and required tables.
+    Set up the database connection and create citation and assessment tables if needed.
+    """
+    connector = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+
+    # Main table for papers with DOIs
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS papers (
+        doi TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        publication_year INTEGER,
+        authors TEXT,
+        venue TEXT,
+        volume TEXT,
+        issue TEXT,
+        download_link TEXT,
+        source_file TEXT
+    )
+    """)
+
+    # Secondary table for papers without DOIs
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS papers_no_doi (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        publication_year INTEGER,
+        authors TEXT,
+        venue TEXT,
+        volume TEXT,
+        issue TEXT,
+        download_link TEXT,
+        source_file TEXT,
+        UNIQUE(title, authors)
+    )
+    """)
+
+    # Table for paper assessments
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS paper_assessments (
+        paper_id TEXT PRIMARY KEY,
+        is_neurosymbolic BOOLEAN,
+        key_development BOOLEAN,
+        contribution TEXT,
+        assessment_date TIMESTAMP,
+        FOREIGN KEY (paper_id) REFERENCES papers (doi)
+    )
+    """)    
+
+    connector.commit()
+
+
+def main():
+    load_dotenv(find_dotenv())
     st.set_page_config(
         page_title="Literature Dashboard",
         initial_sidebar_state="collapsed",
         layout="wide"
     )
+
+    # Start DB
+    setup_database()
 
     with st.sidebar:
         if st.button("Import Citations"):
@@ -43,9 +102,14 @@ if __name__ == "__main__":
 
         if st.button("Process Papers"):
             with st.spinner("Processing papers..."):
-                process_papers()
+                processor = PdfProcessor()
+                try:
+                    processor.process_directory('papers')
+                finally:
+                    processor.close()
 
-    papers_tab, assessments_tab = st.tabs(["Papers", "Assessments"])
+    papers_tab, assessments_tab, papers_view_tab = st.tabs(
+        ["Papers", "Aggregated Assessments", "Paper Assessments"])
 
     # Add CSS for better styling
     st.markdown("""
@@ -164,3 +228,10 @@ if __name__ == "__main__":
         # Interactive table
         st.subheader("Assessment Details")
         st.dataframe(assessments_df)
+
+    with papers_view_tab:
+        papers_view()
+
+
+if __name__ == "__main__":
+    main()

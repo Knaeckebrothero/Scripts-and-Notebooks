@@ -4,6 +4,7 @@ Uses LangChain for PDF processing and LLM-based assessment.
 """
 import os
 import sqlite3
+import re
 from typing import List, Optional
 from datetime import datetime
 from pathlib import Path
@@ -16,63 +17,60 @@ from langchain_community.document_loaders import PyPDFLoader
 import PyPDF2
 
 
-# Data model for paper assessment
 class PaperAssessment(BaseModel):
-    """Assessment results for a research paper."""
-
-    # Whether the paper is primarily about neurosymbolic AI or not.
+    """
+    Data model for the research paper assessment.
+    """
     is_neurosymbolic: bool = Field(
-        description="Whether the paper is primarily about neurosymbolic AI. "
+        description="Whether the paper is primarily about neurosymbolic AI. This is the case if at least half of the paper's total content deals with or focuses on topics that involve combining or integrating symbolic reasoning, knowledge representation, or logic-based approaches with neural network architectures. Key indicators include substantial discussion of hybrid systems, neural-symbolic integration techniques, or applications of neurosymbolic methods to AI problems. Papers that only briefly mention neurosymbolic AI without significant elaboration should not be considered primarily about the topic."
     )
 
     key_development: bool = Field(
-        description="Whether the paper presents a significant development in neurosymbolic AI"
-    )
-    development_type: Optional[str] = Field(
-        description="Type of development (theoretical, practical, application, etc.)"
-    )
-    main_contribution: str = Field(
-        description="Main contribution of the paper in 1-2 sentences"
-    )
-    challenges_addressed: List[str] = Field(
-        description="List of challenges in neurosymbolic AI that this paper addresses"
-    )
-    quality_score: int = Field(
-        description="Quality score (1-5) based on methodology, clarity, and significance",
-        ge=1,
-        le=5
-    )
-    inclusion_justification: str = Field(
-        description="Brief justification for including/excluding this paper"
+        description="Whether the paper presents a significant development in neurosymbolic AI. This includes introducing novel architectures, frameworks, or algorithms that advance the state-of-the-art in integrating symbolic reasoning with neural networks. Key developments should demonstrate improved performance, efficiency, or capabilities compared to existing approaches. They may address fundamental challenges in neurosymbolic AI, such as enhancing interpretability, incorporating prior knowledge, or enabling logical reasoning. Significant developments can also include innovative applications of neurosymbolic methods to real-world problems or domains where traditional approaches struggle. Incremental improvements or minor variations on existing techniques should not be considered key developments."
     )
 
-class PDFProcessor:
-    def __init__(self, db_path: str = 'literature.db'):
-        """Initialize the PDF processor with database connection."""
-        load_dotenv(find_dotenv())
+    contribution: str = Field(
+        description="Concisely summarize the main contribution or advancement made by the paper in 1-2 sentences. This should capture the most significant or novel aspect of the work, such as introducing a new neurosymbolic architecture, proposing an efficient algorithm for integrating symbolic knowledge into neural networks, or demonstrating substantial performance gains on a challenging task. The summary should highlight the key technical innovation or insight that sets this paper apart from prior work. Avoid simply restating the paper's title or abstract; instead, distill the essence of the contribution in clear and specific terms. If the paper makes multiple contributions, focus on the most impactful or central one."
+    )
 
-        self.db_path = db_path
-        self.conn = None
-        self.setup_database()
+
+class PdfProcessor:
+    """
+    ETL class for importing and processing research papers.
+    """
+    def __init__(self, prompt_path: str = 'assessment_prompt.txt', db_path: str = 'literature.db'):
+        self.conn = sqlite3.connect(db_path)
+        cursor = self.conn.cursor()
 
         # Initialize LangChain components
         self.llm = ChatOpenAI(
-            model="gpt-4-turbo-preview",
-            temperature=0.2
+            model="gpt-4o", # gpt-4-turbo
+            temperature=0.0
         )
         self.parser = PydanticOutputParser(pydantic_object=PaperAssessment)
-
-        # Load prompt template
         self.prompt = PromptTemplate(
-            template=self._load_prompt_template(),
+            template=self._load_prompt_template(prompt_path),
             input_variables=["paper_content"],
             partial_variables={"format_instructions": self.parser.get_format_instructions()}
         )
+    
 
-    def _load_prompt_template(self) -> str:
-        """Load the prompt template from a file or return a default template."""
+    def __del__(self):
+        if self.conn:
+            self.conn.close()
+
+
+    def close(self):
+        if self.conn:
+            self.conn.close()
+
+
+    def _load_prompt_template(self, file_path: str) -> str:
+        """
+        Load the prompt template from a file or return a default template.
+        """
         try:
-            with open("assessment_prompt.txt", "r") as f:
+            with open(file_path, "r") as f:
                 return f.read()
         except FileNotFoundError:
             return """
@@ -85,31 +83,11 @@ class PDFProcessor:
             {format_instructions}
             """
 
-    def setup_database(self):
-        """Set up the database connection and create assessment table if needed."""
-        self.conn = sqlite3.connect(self.db_path)
-        cursor = self.conn.cursor()
-
-        cursor.execute('''
-        CREATE TABLE IF NOT EXISTS paper_assessments (
-            paper_id TEXT PRIMARY KEY,
-            is_neurosymbolic BOOLEAN,
-            key_development BOOLEAN,
-            development_type TEXT,
-            main_contribution TEXT,
-            challenges_addressed TEXT,
-            quality_score INTEGER,
-            inclusion_justification TEXT,
-            assessment_date TIMESTAMP,
-            FOREIGN KEY (paper_id) REFERENCES papers (doi)
-        )
-        ''')
-
-        self.conn.commit()
 
     def standardize_doi(self, doi: str) -> Optional[str]:
-        """Standardize DOI to the format '10.xxxx/yyyy.zzzz'."""
-        import re
+        """
+        Function to standardize a DOI string to the format '10.xxxx/yyyy.zzzz'.
+        """
         if not doi:
             return None
 
@@ -124,9 +102,11 @@ class PDFProcessor:
             'doi:',
             'doi: '
         ]
+
         for prefix in prefixes:
             if doi.startswith(prefix):
                 doi = doi[len(prefix):]
+
         print(f"After prefix removal: {doi}")
 
         # Find potential DOIs and standardize them
@@ -165,8 +145,11 @@ class PDFProcessor:
 
         return None
 
+
     def extract_doi_from_pdf(self, pdf_path: str) -> Optional[str]:
-        """Extract DOI from PDF content or metadata."""
+        """
+        Function to extract the DOI from PDF content or metadata.
+        """
         try:
             with open(pdf_path, 'rb') as file:
                 pdf = PyPDF2.PdfReader(file)
@@ -194,8 +177,11 @@ class PDFProcessor:
             print(f"Error extracting DOI from {pdf_path}: {e}")
             return None
 
+
     def extract_title_from_pdf(self, pdf_path: str) -> Optional[str]:
-        """Extract title from PDF content."""
+        """
+        Function to extract the title from PDF.
+        """
         try:
             with open(pdf_path, 'rb') as file:
                 pdf = PyPDF2.PdfReader(file)
@@ -219,8 +205,11 @@ class PDFProcessor:
             print(f"Error extracting title from {pdf_path}: {e}")
             return None
 
+
     def find_paper_id(self, pdf_path: str) -> Optional[str]:
-        """Find paper ID using DOI or title fallback."""
+        """
+        Function to find the paper ID (DOI) from the database using DOI or title fallback.
+        """
         cursor = self.conn.cursor()
 
         # Try DOI first
@@ -256,8 +245,11 @@ class PDFProcessor:
         print(f"No matching paper found for {pdf_path}")
         return None
 
+
     def process_pdf(self, pdf_path: str) -> Optional[PaperAssessment]:
-        """Process a single PDF and return its assessment."""
+        """
+        Function to process a single PDF and return its assessment.
+        """
         try:
             # Load PDF
             loader = PyPDFLoader(pdf_path)
@@ -278,32 +270,32 @@ class PDFProcessor:
             print(f"Error processing {pdf_path}: {e}")
             return None
 
+
     def save_assessment(self, paper_id: str, assessment: PaperAssessment):
-        """Save the paper assessment to the database."""
+        """
+        Function to save the paper assessment to the database.
+        """
         cursor = self.conn.cursor()
 
         cursor.execute('''
         INSERT OR REPLACE INTO paper_assessments
-        (paper_id, is_neurosymbolic, key_development, development_type,
-         main_contribution, challenges_addressed, quality_score,
-         inclusion_justification, assessment_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (paper_id, is_neurosymbolic, key_development, contribution, assessment_date)
+        VALUES (?, ?, ?, ?, ?)
         ''', (
             paper_id,
             assessment.is_neurosymbolic,
             assessment.key_development,
-            assessment.development_type,
-            assessment.main_contribution,
-            ','.join(assessment.challenges_addressed),
-            assessment.quality_score,
-            assessment.inclusion_justification,
+            assessment.contribution,
             datetime.now().isoformat()
         ))
 
         self.conn.commit()
 
+
     def process_directory(self, directory_path: str):
-        """Process all PDFs in the specified directory."""
+        """
+        Function to process all PDFs in the specified directory.
+        """
         pdf_files = Path(directory_path).glob('*.pdf')
 
         for pdf_path in pdf_files:
@@ -322,15 +314,3 @@ class PDFProcessor:
                 print(f"Assessment saved for {pdf_path.name}")
             else:
                 print(f"Failed to process {pdf_path.name}")
-
-    def close(self):
-        """Close database connection."""
-        if self.conn:
-            self.conn.close()
-
-def process_papers(directory_path: str = 'papers'):
-    processor = PDFProcessor()
-    try:
-        processor.process_directory(directory_path)
-    finally:
-        processor.close()
