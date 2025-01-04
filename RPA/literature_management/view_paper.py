@@ -6,6 +6,7 @@ import pandas as pd
 import sqlite3
 from pathlib import Path
 
+
 def get_connection():
     """Create a connection to the SQLite database."""
     return sqlite3.connect('literature.db', check_same_thread=False)
@@ -14,16 +15,15 @@ def load_paper_details():
     """Load all paper details with their assessments."""
     conn = get_connection()
     query = """
-    SELECT 
+    SELECT     
         p.doi,
         p.title,
         p.authors,
         p.publication_year,
         p.venue,
         p.volume,
-        p.issue,
-        p.download_link,
-        p.source_file,
+        p.publication_type,
+        p.publication_source,  
         a.is_neurosymbolic,
         a.key_development,
         a.contribution,
@@ -37,7 +37,6 @@ def load_paper_details():
 
 def display_paper_details(paper):
     """Display detailed information about a single paper."""
-    # Paper metadata section
     st.header("Paper Details")
     col1, col2 = st.columns([2, 1])
 
@@ -45,19 +44,17 @@ def display_paper_details(paper):
         st.markdown(f"### {paper['title']}")
         st.markdown(f"**Authors:** {paper['authors']}")
         st.markdown(f"**Venue:** {paper['venue']}")
-        if pd.notna(paper['volume']) or pd.notna(paper['issue']):
-            st.markdown(f"**Volume/Issue:** {paper['volume']}/{paper['issue']}")
+        if pd.notna(paper['volume']):
+            st.markdown(f"**Volume:** {paper['volume']}")
 
     with col2:
         st.markdown(f"**Year:** {paper['publication_year']}")
         st.markdown(f"**DOI:** {paper['doi']}")
-        if pd.notna(paper['download_link']):
-            st.markdown(f"[Download Paper]({paper['download_link']})")
+        st.markdown(f"**Type:** {paper['publication_type']}")
+        st.markdown(f"**Source:** {paper['publication_source']}")
 
     # Assessment section
     st.header("AI Assessment")
-
-    # Metrics in columns
     col1, col2 = st.columns(2)
     with col1:
         st.metric(
@@ -72,12 +69,10 @@ def display_paper_details(paper):
             help="Whether the paper presents a significant development in the field"
         )
 
-    # Contribution assessment
     st.subheader("Key Contribution")
     st.markdown(paper['contribution'])
-
-    # Assessment metadata
     st.caption(f"Assessment performed on: {pd.to_datetime(paper['assessment_date']).strftime('%Y-%m-%d %H:%M')}")
+
 
 def papers_view():
     """Main function for the papers view page."""
@@ -160,3 +155,4 @@ def papers_view():
                 "text/csv",
                 key='download-csv'
             )
+

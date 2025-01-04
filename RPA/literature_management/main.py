@@ -6,9 +6,10 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
-from pathlib import Path
+from dotenv import find_dotenv, load_dotenv
 from process_papers import PdfProcessor
-from import_paper_citations import import_citations
+from pathlib import Path
+from import_citations import CitationProcessor
 from view_paper import papers_view
 
 
@@ -32,56 +33,132 @@ def load_data(query):
 
 def setup_database(db_path: str = 'literature.db'):
     """
-    Function to create the SQLite database and required tables.
-    Set up the database connection and create citation and assessment tables if needed.
+    Function to create the SQLite database, set up the connection
+    and create citation and assessment tables if needed.
     """
     connector = sqlite3.connect(db_path)
-    cursor = conn.cursor()
+    cursor = connector.cursor()
 
-    # Main table for papers with DOIs
+    # Main table for papers
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS papers (
-        doi TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
+        id INTEGER PRIMARY KEY AUTOINCREMENT, 
+        doi TEXT UNIQUE NOT NULL,
+        title TEXT,
         publication_year INTEGER,
         authors TEXT,
         venue TEXT,
         volume TEXT,
-        issue TEXT,
-        download_link TEXT,
-        source_file TEXT
-    )
-    """)
-
-    # Secondary table for papers without DOIs
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS papers_no_doi (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        publication_year INTEGER,
-        authors TEXT,
-        venue TEXT,
-        volume TEXT,
-        issue TEXT,
-        download_link TEXT,
-        source_file TEXT,
-        UNIQUE(title, authors)
+        publication_type TEXT, 
+        publication_source TEXT,
+        file_path TEXT DEFAULT NULL 
     )
     """)
 
     # Table for paper assessments
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS paper_assessments (
-        paper_id TEXT PRIMARY KEY,
+        paper_id INTEGER PRIMARY KEY,
         is_neurosymbolic BOOLEAN,
         key_development BOOLEAN,
         contribution TEXT,
         assessment_date TIMESTAMP,
-        FOREIGN KEY (paper_id) REFERENCES papers (doi)
+        FOREIGN KEY (paper_id) REFERENCES papers (id)
     )
-    """)    
+    """)
+
+    # Table for keywords
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS keywords (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        keyword TEXT UNIQUE
+    )
+    """)
+
+    # Relationship table for keywords and papers
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS rel_keywords_papers (
+        paper_id INTEGER,
+        keyword_id INTEGER,
+        FOREIGN KEY (paper_id) REFERENCES papers (id),
+        FOREIGN KEY (keyword_id) REFERENCES keywords (id)
+    )
+    """)
 
     connector.commit()
+
+
+def import_citations():
+    # Configure base path for search results
+    search_dir = Path('search_results')
+
+    # Configure files with relative paths
+    file_config = {
+        'bibtex': [
+            search_dir / 'acm.bib',
+            search_dir / 'ScienceDirect_1.bib',
+            search_dir / 'ScienceDirect_2.bib',
+            search_dir / 'wiley_1.bib',
+            search_dir / 'wiley_2.bib'
+        ],
+        'ieee': [search_dir / 'ieee.csv'],
+        'springer': [
+            search_dir / 'SpringerLink_1.csv',
+            search_dir / 'SpringerLink_2.csv'
+        ],
+    }
+
+    processor = CitationProcessor()
+    processor.process_files(file_config)
+
+
+def process_papers():
+    processor = PdfProcessor()
+    try:
+        processor.process_directory('papers')
+    finally:
+        processor.close()
+
+
+def add_paper():
+    st.title("Add Paper")
+
+    # Form for paper details
+    with st.form("paper_form"):
+        doi = st.text_input("DOI*", help="Digital Object Identifier (required)")
+        title = st.text_input("Title*", help="Paper title (required)")
+        year = st.number_input("Publication Year*", min_value=1900, max_value=2100, value=2024)
+        authors = st.text_input("Authors*", help="Comma-separated list of authors")
+        venue = st.text_input("Venue", help="Journal or conference name")
+        volume = st.text_input("Volume")
+        publication_type = st.text_input("Publication Type")
+        publication_source = st.text_input("Publication Source", help="Where this paper was found")
+
+        submitted = st.form_submit_button("Add Paper")
+
+        if submitted:
+            if not all([doi, title, authors]):
+                st.error("Please fill in all required fields (marked with *)")
+                return
+
+            conn = get_connection()
+            cursor = conn.cursor()
+
+            try:
+                cursor.execute("""
+                    INSERT INTO papers 
+                    (doi, title, publication_year, authors, venue, volume, publication_type, publication_source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """, (doi, title, year, authors, venue, volume, publication_type, publication_source))
+
+                conn.commit()
+                st.success("Paper added successfully!")
+            except sqlite3.IntegrityError:
+                st.error("A paper with this DOI already exists in the database")
+            except Exception as e:
+                st.error(f"Error adding paper: {str(e)}")
+            finally:
+                conn.close()
 
 
 def main():
@@ -92,7 +169,7 @@ def main():
         layout="wide"
     )
 
-    # Start DB
+    # Initialize the db
     setup_database()
 
     with st.sidebar:
@@ -102,14 +179,10 @@ def main():
 
         if st.button("Process Papers"):
             with st.spinner("Processing papers..."):
-                processor = PdfProcessor()
-                try:
-                    processor.process_directory('papers')
-                finally:
-                    processor.close()
+                process_papers()
 
-    papers_tab, assessments_tab, papers_view_tab = st.tabs(
-        ["Papers", "Aggregated Assessments", "Paper Assessments"])
+    papers_tab, assessments_tab, papers_view_tab, add_paper_tab = st.tabs(
+        ["Papers", "Aggregated Assessments", "Paper Assessments", "Add Paper"])
 
     # Add CSS for better styling
     st.markdown("""
@@ -125,14 +198,12 @@ def main():
         </style>
         """, unsafe_allow_html=True)
 
+    # Papers tab that displays basic statistics about the papers in the database.
     with papers_tab:
         st.title("Papers")
 
         try:
-            if st.checkbox("Include without doi"):
-                papers_df = load_data("""SELECT * FROM papers UNION SELECT * FROM papers_no_doi""")
-            else:
-                papers_df = load_data("SELECT * FROM papers")
+            papers_df = load_data("SELECT * FROM papers")
         except sqlite3.OperationalError:
             st.error("Please import citations first!")
 
@@ -169,7 +240,9 @@ def main():
         st.subheader("Papers Database")
         st.dataframe(papers_df)
 
-    with assessments_tab:  # Paper Assessments
+
+    # Assessment tab that displays aggregated statistics about the papers in the database.
+    with assessments_tab:
         st.title("Paper Assessments")
 
         try:
@@ -231,6 +304,9 @@ def main():
 
     with papers_view_tab:
         papers_view()
+
+    with add_paper_tab:
+        add_paper()
 
 
 if __name__ == "__main__":

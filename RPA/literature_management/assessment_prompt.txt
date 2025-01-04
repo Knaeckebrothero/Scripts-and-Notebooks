@@ -4,4 +4,5 @@ Focus on its relevance to neurosymbolic AI and its key developments.
 Paper content:
 {paper_content}
 
+Assessment instructions:
 {format_instructions}

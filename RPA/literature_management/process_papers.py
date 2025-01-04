@@ -34,26 +34,217 @@ class PaperAssessment(BaseModel):
     )
 
 
+def _load_prompt_template(file_path: str) -> str:
+    """
+    Load the prompt template from a file or return a default template.
+    """
+    try:
+        with open(file_path, "r") as f:
+            return f.read()
+    except FileNotFoundError:
+        return """
+        Please analyze the following research paper content and provide a structured assessment.
+        Focus on its relevance to neurosymbolic AI and its key developments.
+        
+        Paper content:
+        {paper_content}
+        
+        Assessment instructions:
+        {format_instructions}
+        """
+
+
+def standardize_doi(doi: str) -> Optional[str]:
+    """
+    Function to standardize a DOI string to the format '10.xxxx/yyyy.zzzz'.
+    Handles various DOI formats and patterns found in academic papers.
+    """
+    if not doi:
+        return None
+
+    print(f"Original DOI string: {doi}")
+
+    # Remove common prefixes and whitespace
+    doi = doi.lower().strip()
+    prefixes = [
+        'https://doi.org/',
+        'http://doi.org/',
+        'doi.org/',
+        'doi:',
+        'doi: ',
+        'digital object identifier ',
+        'digital object identifier: '
+    ]
+
+    for prefix in prefixes:
+        if doi.startswith(prefix):
+            doi = doi[len(prefix):]
+
+    print(f"After prefix removal: {doi}")
+
+    # Define patterns for different DOI formats
+    patterns = [
+        # ACM specific patterns
+        r'10\.1145/\d{7}\.\d{7}\b',
+        r'10\.1145/\d{6,7}\b',  # Shorter ACM DOIs
+        # IEEE conference and journal patterns
+        r'10\.1109/[A-Z]+\d+\.\d+\.\d+',
+        r'10\.1109/[A-Z]+\.\d{4}\.\d{7}',
+        # Wiley patterns
+        r'10\.1002/[a-z]+\.\d{4}',
+        r'10\.1002/[a-z]+\.\d{4,5}',
+        # Russian journal pattern
+        r'10\.3103/S\d{13}\b',
+        # General DOI patterns with optional suffix
+        r'10\.\d{4,5}/[-._;()\/:A-Z0-9]+',
+        # Alternative format with S-prefixed numbers
+        r'10\.\d{4}/S\d+',
+        # Handle DOIs embedded in URLs
+        r'(?<=doi\.org/)(10\.\d{4,5}/[-._;()\/:A-Z0-9]+)',
+        # Alternative format sometimes used
+        r'10/[-._;()\/:A-Z0-9]+\.\d{4}',
+        # ACM format with year
+        r'10\.1145/\d{7}(?:\.\d{0,7})?',
+    ]
+
+    # Try each pattern
+    for pattern in patterns:
+        matches = re.finditer(pattern, doi, re.IGNORECASE)
+        dois = [match.group(0) for match in matches]
+        if dois:
+            raw_doi = dois[0]
+            print(f"Found DOI with pattern {pattern}: {raw_doi}")
+
+            # Standardize ACM DOIs
+            if raw_doi.startswith('10.1145/'):
+                try:
+                    prefix, numbers = raw_doi.split('/')
+                    base, suffix = numbers.split('.')
+                    base = base[:7]  # Take first 7 digits
+                    suffix = suffix[:7]  # Take first 7 digits
+                    standardized = f"{prefix}/{base}.{suffix}"
+                    print(f"Standardized ACM DOI: {standardized}")
+                    return standardized
+                except Exception as e:
+                    print(f"Error standardizing ACM DOI: {e}")
+                    continue
+
+            return raw_doi
+
+    return None
+
+
+def extract_doi_from_pdf(pdf_path: str) -> Optional[str]:
+    """
+    Function to extract the DOI from PDF content or metadata.
+    Now handles various DOI formats and locations in academic papers.
+    """
+    try:
+        with open(pdf_path, 'rb') as file:
+            pdf = PyPDF2.PdfReader(file)
+
+            # Try metadata first
+            if pdf.metadata and '/doi' in pdf.metadata:
+                doi = standardize_doi(pdf.metadata['/doi'])
+                if doi:
+                    return doi
+
+            # Search first few pages
+            # Search first few pages
+            search_phrases = [
+                'doi',
+                'digital object identifier',
+                'https://doi.org',
+                'doi.org',
+                '10.1109/',  # IEEE
+                '10.1145/',  # ACM
+                '10.1007/',  # Springer
+                '10.3103/',  # Russian journals
+                '10.1002/',  # Wiley
+                'acm.org',   # ACM permissions
+                'permission',  # Often appears near DOIs
+                'copyright',   # Often appears near DOIs
+                '©',          # Copyright symbol often precedes DOI
+                'received:',   # Often appears near DOIs in headers
+                'revised:',    # Often appears near DOIs in headers
+                'accepted:'    # Often appears near DOIs in headers
+            ]
+
+            # Expand search range to catch DOIs that might appear later
+            for i in range(min(5, len(pdf.pages))):
+                text = pdf.pages[i].extract_text().lower()
+                lines = text.split('\n')
+
+                # First try to find lines containing DOI indicators
+                for line in lines:
+                    if any(phrase in line.lower() for phrase in search_phrases):
+                        doi = standardize_doi(line)
+                        if doi:
+                            return doi
+
+                # If no DOI found with indicators, try pattern matching on all lines
+                # This catches cases where DOI appears without explicit marking
+                for line in lines:
+                    doi = standardize_doi(line)
+                    if doi:
+                        return doi
+
+            return None
+
+    except Exception as e:
+        print(f"Error extracting DOI from {pdf_path}: {e}")
+        return None
+
+
+def extract_title_from_pdf(pdf_path: str) -> Optional[str]:
+    """
+    Function to extract the title from PDF.
+    """
+    try:
+        with open(pdf_path, 'rb') as file:
+            pdf = PyPDF2.PdfReader(file)
+
+            # Try metadata first
+            if pdf.metadata and '/Title' in pdf.metadata:
+                return pdf.metadata['/Title'].strip()
+
+            # Try first page
+            first_page_text = pdf.pages[0].extract_text()
+            lines = first_page_text.split('\n')
+
+            # Usually the title is one of the first non-empty lines
+            for line in lines[:10]:  # Check first 10 lines
+                line = line.strip()
+                if line and len(line) > 20:  # Basic heuristic for title-like text
+                    return line
+
+            return None
+    except Exception as e:
+        print(f"Error extracting title from {pdf_path}: {e}")
+        return None
+
+
 class PdfProcessor:
     """
     ETL class for importing and processing research papers.
     """
     def __init__(self, prompt_path: str = 'assessment_prompt.txt', db_path: str = 'literature.db'):
         self.conn = sqlite3.connect(db_path)
-        cursor = self.conn.cursor()
+        # cursor = self.conn.cursor()
 
         # Initialize LangChain components
         self.llm = ChatOpenAI(
-            model="gpt-4o", # gpt-4-turbo
-            temperature=0.0
+            model="gpt-4o-mini", # gpt-4-turbo gpt-4o
+            temperature=0.0,
+            seed=3459746589468594
         )
         self.parser = PydanticOutputParser(pydantic_object=PaperAssessment)
         self.prompt = PromptTemplate(
-            template=self._load_prompt_template(prompt_path),
+            template=_load_prompt_template(prompt_path),
             input_variables=["paper_content"],
             partial_variables={"format_instructions": self.parser.get_format_instructions()}
         )
-    
+
 
     def __del__(self):
         if self.conn:
@@ -65,182 +256,75 @@ class PdfProcessor:
             self.conn.close()
 
 
-    def _load_prompt_template(self, file_path: str) -> str:
+    def find_paper_id(self, pdf_path: str) -> Optional[int]:
         """
-        Load the prompt template from a file or return a default template.
-        """
-        try:
-            with open(file_path, "r") as f:
-                return f.read()
-        except FileNotFoundError:
-            return """
-            Please analyze the following research paper content and provide a structured assessment.
-            Focus on its relevance to neurosymbolic AI and its key developments.
-            
-            Paper content:
-            {paper_content}
-            
-            {format_instructions}
-            """
-
-
-    def standardize_doi(self, doi: str) -> Optional[str]:
-        """
-        Function to standardize a DOI string to the format '10.xxxx/yyyy.zzzz'.
-        """
-        if not doi:
-            return None
-
-        print(f"Original DOI string: {doi}")
-
-        # Remove common prefixes and whitespace
-        doi = doi.lower().strip()
-        prefixes = [
-            'https://doi.org/',
-            'http://doi.org/',
-            'doi.org/',
-            'doi:',
-            'doi: '
-        ]
-
-        for prefix in prefixes:
-            if doi.startswith(prefix):
-                doi = doi[len(prefix):]
-
-        print(f"After prefix removal: {doi}")
-
-        # Find potential DOIs and standardize them
-        # First try exact ACM pattern
-        acm_pattern = r'10\.1145/\d{7}\.\d{7}\b'
-        matches = re.finditer(acm_pattern, doi)
-        dois = [match.group(0) for match in matches]
-        if dois:
-            print(f"Found exact ACM DOI: {dois[0]}")
-            return dois[0]
-
-        # If no exact match, try general pattern and trim
-        general_pattern = r'10\.\d{4}/\d+\.\d+'
-        matches = re.finditer(general_pattern, doi)
-        dois = [match.group(0) for match in matches]
-        if dois:
-            # Take first match and standardize it
-            raw_doi = dois[0]
-            print(f"Found raw DOI: {raw_doi}")
-
-            # Split into parts and standardize
-            try:
-                prefix, numbers = raw_doi.split('/')
-                base, suffix = numbers.split('.')
-                # For ACM DOIs, ensure exactly 7 digits in each part
-                if prefix == '10.1145':
-                    base = base[:7]  # Take first 7 digits
-                    suffix = suffix[:7]  # Take first 7 digits
-                    standardized = f"{prefix}/{base}.{suffix}"
-                    print(f"Standardized DOI: {standardized}")
-                    return standardized
-                return raw_doi
-            except Exception as e:
-                print(f"Error standardizing DOI: {e}")
-                return None
-
-        return None
-
-
-    def extract_doi_from_pdf(self, pdf_path: str) -> Optional[str]:
-        """
-        Function to extract the DOI from PDF content or metadata.
-        """
-        try:
-            with open(pdf_path, 'rb') as file:
-                pdf = PyPDF2.PdfReader(file)
-
-                # Try to get DOI from metadata
-                if pdf.metadata and '/doi' in pdf.metadata:
-                    return self.standardize_doi(pdf.metadata['/doi'])
-
-                # Search first few pages for DOI pattern
-                for i in range(min(3, len(pdf.pages))):
-                    text = pdf.pages[i].extract_text().lower()
-
-                    # Look for DOI patterns in the text
-                    if 'doi' in text:
-                        # Split into lines for better pattern matching
-                        lines = text.split('\n')
-                        for line in lines:
-                            if 'doi' in line:
-                                standardized_doi = self.standardize_doi(line)
-                                if standardized_doi:
-                                    return standardized_doi
-
-                return None
-        except Exception as e:
-            print(f"Error extracting DOI from {pdf_path}: {e}")
-            return None
-
-
-    def extract_title_from_pdf(self, pdf_path: str) -> Optional[str]:
-        """
-        Function to extract the title from PDF.
-        """
-        try:
-            with open(pdf_path, 'rb') as file:
-                pdf = PyPDF2.PdfReader(file)
-
-                # Try metadata first
-                if pdf.metadata and '/Title' in pdf.metadata:
-                    return pdf.metadata['/Title'].strip()
-
-                # Try first page
-                first_page_text = pdf.pages[0].extract_text()
-                lines = first_page_text.split('\n')
-
-                # Usually the title is one of the first non-empty lines
-                for line in lines[:10]:  # Check first 10 lines
-                    line = line.strip()
-                    if line and len(line) > 20:  # Basic heuristic for title-like text
-                        return line
-
-                return None
-        except Exception as e:
-            print(f"Error extracting title from {pdf_path}: {e}")
-            return None
-
-
-    def find_paper_id(self, pdf_path: str) -> Optional[str]:
-        """
-        Function to find the paper ID (DOI) from the database using DOI or title fallback.
+        Function to find the paper ID from the database using DOI or title fallback.
+        Returns the integer ID from the papers table.
         """
         cursor = self.conn.cursor()
 
         # Try DOI first
-        doi = self.extract_doi_from_pdf(pdf_path)
+        doi = extract_doi_from_pdf(pdf_path)
         if doi:
-            cursor.execute('SELECT doi FROM papers WHERE doi = ?', (doi,))
+            # Debug: Print all DOIs in database for comparison
+            cursor.execute('SELECT doi FROM papers')
+            all_dois = [row[0] for row in cursor.fetchall()]
+            print(f"Found DOI in PDF: {doi}")
+            print(f"Looking for match among database DOIs: {all_dois[:5]}...")  # Show first 5 for brevity
+
+            # Try exact match first
+            cursor.execute('SELECT id FROM papers WHERE doi = ?', (doi,))
             result = cursor.fetchone()
             if result:
                 return result[0]
-            print(f"DOI {doi} not found in database, trying title matching...")
+
+            # If no exact match, try case-insensitive match
+            cursor.execute('SELECT id FROM papers WHERE LOWER(doi) = LOWER(?)', (doi,))
+            result = cursor.fetchone()
+            if result:
+                return result[0]
+
+            # If still no match, try without any potential trailing characters
+            base_doi = re.match(r'(10\.\d{4,5}/[^/\s]+)', doi)
+            if base_doi:
+                cursor.execute('SELECT id FROM papers WHERE doi LIKE ?', (f"{base_doi.group(1)}%",))
+                result = cursor.fetchone()
+                if result:
+                    return result[0]
+
+            print(f"DOI {doi} not found in database with any matching method, trying title matching...")
 
         # Fallback to title matching
-        title = self.extract_title_from_pdf(pdf_path)
+        title = extract_title_from_pdf(pdf_path)
         if title:
-            # Use simple string similarity for matching
-            cursor.execute('''
-                SELECT doi, title 
-                FROM papers 
-                WHERE LOWER(title) LIKE ?
-                   OR ? LIKE CONCAT('%', LOWER(title), '%')
-                   OR LOWER(title) LIKE CONCAT('%', ?, '%')
-            ''', (title.lower(), title.lower(), title.lower()))
+            print(f"Attempting to match title: {title}")
 
-            results = cursor.fetchall()
-            if results:
-                if len(results) == 1:
-                    return results[0][0]
-                else:
-                    print(f"Multiple potential matches found for title: {title}")
-                    # Could implement manual selection here if needed
-                    return results[0][0]  # Return first match
+            # Clean the title for better matching
+            clean_title = re.sub(r'[^\w\s-]', '', title.lower())
+            words = clean_title.split()
+            if len(words) > 3:  # Only try if we have enough words to make a meaningful match
+                # Create a LIKE pattern matching any 3 consecutive words
+                patterns = []
+                for i in range(len(words) - 2):
+                    pattern = f"%{words[i]}%{words[i+1]}%{words[i+2]}%"
+                    patterns.append(pattern)
+
+                # Try each pattern
+                for pattern in patterns:
+                    cursor.execute('''
+                        SELECT id, title
+                        FROM papers 
+                        WHERE LOWER(REPLACE(title, ':', '')) LIKE ?
+                    ''', (pattern,))
+
+                    results = cursor.fetchall()
+                    if results:
+                        print(f"Found {len(results)} potential matches:")
+                        for r in results:
+                            print(f"ID: {r[0]}, Title: {r[1]}")
+                        return results[0][0]  # Return first match
+
+            print(f"No title matches found using any pattern")
 
         print(f"No matching paper found for {pdf_path}")
         return None
@@ -251,6 +335,10 @@ class PdfProcessor:
         Function to process a single PDF and return its assessment.
         """
         try:
+            #if len(PyPDF2.PdfReader(pdf_path).pages) > 40:
+            #    print(f"Skipping {pdf_path} due to excessive page count")
+            #    return None
+
             # Load PDF
             loader = PyPDFLoader(pdf_path)
             pages = loader.load()
@@ -260,18 +348,21 @@ class PdfProcessor:
             for page in pages:
                 content += page.page_content + "\n"
 
-            # Generate assessment using LLM
-            chain = self.prompt | self.llm | self.parser
-            assessment = chain.invoke({"paper_content": content[:8000]})  # Limit content length
+            # Generate assessment using a LLM
+            # chain = self.prompt | self.llm | self.parser
+            # assessment = chain.invoke({"paper_content": content})
 
-            return assessment
+            # return assessment
+
+            print("Processed")
+            return PaperAssessment(is_neurosymbolic=True, key_development=True, contribution="This is a test")
 
         except Exception as e:
             print(f"Error processing {pdf_path}: {e}")
             return None
 
 
-    def save_assessment(self, paper_id: str, assessment: PaperAssessment):
+    def save_assessment(self, paper_id: int, assessment: PaperAssessment):
         """
         Function to save the paper assessment to the database.
         """
@@ -294,7 +385,7 @@ class PdfProcessor:
 
     def process_directory(self, directory_path: str):
         """
-        Function to process all PDFs in the specified directory.
+        Method to process all PDFs in the specified directory.
         """
         pdf_files = Path(directory_path).glob('*.pdf')
 
@@ -303,6 +394,7 @@ class PdfProcessor:
 
             # Find paper ID (using DOI or title fallback)
             paper_id = self.find_paper_id(str(pdf_path))
+            print("Paper ID -> ", paper_id)
             if not paper_id:
                 print(f"No matching paper found for {pdf_path.name}, skipping...")
                 continue
@@ -312,5 +404,14 @@ class PdfProcessor:
             if assessment:
                 self.save_assessment(paper_id, assessment)
                 print(f"Assessment saved for {pdf_path.name}")
+
+                # Save the path in the database
+                cursor = self.conn.cursor()
+                cursor.execute('''
+                    UPDATE papers
+                    SET file_path = ?
+                    WHERE id = ?
+                ''', (str(pdf_path), paper_id))
+
             else:
                 print(f"Failed to process {pdf_path.name}")

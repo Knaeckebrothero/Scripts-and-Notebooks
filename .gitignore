@@ -1,14 +1,16 @@
-# Projecspecific contents go here
-
-
 # Local environment
 .env
 
-# Yaml
-# *.yaml
-
 # SQLite database files
 *.db
+
+# Data files
+*.csv
+*.bib
+*.ris
+*.pdf
+# *.yaml
+# *.yml
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
