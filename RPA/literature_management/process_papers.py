@@ -5,53 +5,36 @@ Uses LangChain for PDF processing and LLM-based assessment.
 import os
 import sqlite3
 import re
-from typing import List, Optional
+import PyPDF2
+import time
+from typing import List, Optional, Literal, Dict, Any
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv, find_dotenv
-from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
-from langchain.prompts import PromptTemplate
-from langchain.output_parsers import PydanticOutputParser
 from langchain_community.document_loaders import PyPDFLoader
-import PyPDF2
+from langchain_community.llms import Replicate
+from assessment.paper import PaperAssessment
+import logging
+from datetime import datetime
 
 
-class PaperAssessment(BaseModel):
-    """
-    Data model for the research paper assessment.
-    """
-    is_neurosymbolic: bool = Field(
-        description="Whether the paper is primarily about neurosymbolic AI. This is the case if at least half of the paper's total content deals with or focuses on topics that involve combining or integrating symbolic reasoning, knowledge representation, or logic-based approaches with neural network architectures. Key indicators include substantial discussion of hybrid systems, neural-symbolic integration techniques, or applications of neurosymbolic methods to AI problems. Papers that only briefly mention neurosymbolic AI without significant elaboration should not be considered primarily about the topic."
-    )
-
-    key_development: bool = Field(
-        description="Whether the paper presents a significant development in neurosymbolic AI. This includes introducing novel architectures, frameworks, or algorithms that advance the state-of-the-art in integrating symbolic reasoning with neural networks. Key developments should demonstrate improved performance, efficiency, or capabilities compared to existing approaches. They may address fundamental challenges in neurosymbolic AI, such as enhancing interpretability, incorporating prior knowledge, or enabling logical reasoning. Significant developments can also include innovative applications of neurosymbolic methods to real-world problems or domains where traditional approaches struggle. Incremental improvements or minor variations on existing techniques should not be considered key developments."
-    )
-
-    contribution: str = Field(
-        description="Concisely summarize the main contribution or advancement made by the paper in 1-2 sentences. This should capture the most significant or novel aspect of the work, such as introducing a new neurosymbolic architecture, proposing an efficient algorithm for integrating symbolic knowledge into neural networks, or demonstrating substantial performance gains on a challenging task. The summary should highlight the key technical innovation or insight that sets this paper apart from prior work. Avoid simply restating the paper's title or abstract; instead, distill the essence of the contribution in clear and specific terms. If the paper makes multiple contributions, focus on the most impactful or central one."
-    )
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-def _load_prompt_template(file_path: str) -> str:
-    """
-    Load the prompt template from a file or return a default template.
-    """
-    try:
-        with open(file_path, "r") as f:
-            return f.read()
-    except FileNotFoundError:
-        return """
-        Please analyze the following research paper content and provide a structured assessment.
-        Focus on its relevance to neurosymbolic AI and its key developments.
-        
-        Paper content:
-        {paper_content}
-        
-        Assessment instructions:
-        {format_instructions}
-        """
+class RateLimiter:
+    def __init__(self, requests_per_minute: int = 20):
+        self.delay = 60.0 / requests_per_minute
+        self.last_request = 0
+
+    def wait(self):
+        """Wait appropriate amount of time since last request"""
+        now = time.time()
+        elapsed = now - self.last_request
+        if elapsed < self.delay:
+            time.sleep(self.delay - elapsed)
+        self.last_request = time.time()
 
 
 def standardize_doi(doi: str) -> Optional[str]:
@@ -161,13 +144,13 @@ def extract_doi_from_pdf(pdf_path: str) -> Optional[str]:
                 '10.1007/',  # Springer
                 '10.3103/',  # Russian journals
                 '10.1002/',  # Wiley
-                'acm.org',   # ACM permissions
-                'permission',  # Often appears near DOIs
-                'copyright',   # Often appears near DOIs
-                '©',          # Copyright symbol often precedes DOI
-                'received:',   # Often appears near DOIs in headers
-                'revised:',    # Often appears near DOIs in headers
-                'accepted:'    # Often appears near DOIs in headers
+                'acm.org',
+                'permission',
+                'copyright',
+                '©',
+                'received:',
+                'revised:',
+                'accepted:'
             ]
 
             # Expand search range to catch DOIs that might appear later
@@ -233,17 +216,30 @@ class PdfProcessor:
         # cursor = self.conn.cursor()
 
         # Initialize LangChain components
-        self.llm = ChatOpenAI(
-            model="gpt-4o-mini", # gpt-4-turbo gpt-4o
-            temperature=0.0,
+        self.llm_open_ai = ChatOpenAI(
+            model="gpt-4o", # gpt-4-turbo gpt-4o-mini
+            temperature=0.1,
             seed=3459746589468594
         )
-        self.parser = PydanticOutputParser(pydantic_object=PaperAssessment)
-        self.prompt = PromptTemplate(
-            template=_load_prompt_template(prompt_path),
-            input_variables=["paper_content"],
-            partial_variables={"format_instructions": self.parser.get_format_instructions()}
+        self.llm_llama = Replicate(
+            model="meta/meta-llama-3.1-405b-instruct", # model="meta/meta-llama-3.1-405b-instruct",
+            model_kwargs={
+                "top_k": 50,
+                "top_p": 1,
+                "temperature": 0.1,
+                "max_tokens": 65536,
+                "seed": 3459746589468594
+            },
         )
+
+        # Initialize the assessment class
+        self.assessment = PaperAssessment(
+            model=self.llm_open_ai,
+            prompt_path=prompt_path
+        )
+
+        # Initialize rate limiter (20 requests per minute)
+        self.rate_limiter = RateLimiter(requests_per_minute=20)
 
 
     def __del__(self):
@@ -330,88 +326,117 @@ class PdfProcessor:
         return None
 
 
-    def process_pdf(self, pdf_path: str) -> Optional[PaperAssessment]:
-        """
-        Function to process a single PDF and return its assessment.
-        """
+    def process_pdf(self, pdf_path: str) -> Optional[Dict[str, Any]]:
+        """Process a single PDF with rate limiting"""
         try:
-            #if len(PyPDF2.PdfReader(pdf_path).pages) > 40:
-            #    print(f"Skipping {pdf_path} due to excessive page count")
-            #    return None
-
             # Load PDF
             loader = PyPDFLoader(pdf_path)
             pages = loader.load()
 
-            # Combine pages into a single text, focusing on important sections
+            # Combine pages into a single text
             content = ""
             for page in pages:
                 content += page.page_content + "\n"
 
-            # Generate assessment using a LLM
-            # chain = self.prompt | self.llm | self.parser
-            # assessment = chain.invoke({"paper_content": content})
+            # Rate limit and assess
+            self.rate_limiter.wait()
+            assessment = self.assessment.assess_paper(content)
 
-            # return assessment
+            if assessment is None:
+                logger.info(f"Paper {pdf_path} was not assessed as neurosymbolic")
+                return None
 
-            print("Processed")
-            return PaperAssessment(is_neurosymbolic=True, key_development=True, contribution="This is a test")
+            return assessment
 
         except Exception as e:
-            print(f"Error processing {pdf_path}: {e}")
+            logger.error(f"Error processing {pdf_path}: {e}")
             return None
 
 
-    def save_assessment(self, paper_id: int, assessment: PaperAssessment):
-        """
-        Function to save the paper assessment to the database.
-        """
+    def save_assessment(self, paper_id: int, assessment: Dict[str, Any]):
+        """Save paper assessment to database with proper dict access"""
         cursor = self.conn.cursor()
 
-        cursor.execute('''
-        INSERT OR REPLACE INTO paper_assessments
-        (paper_id, is_neurosymbolic, key_development, contribution, assessment_date)
-        VALUES (?, ?, ?, ?, ?)
-        ''', (
-            paper_id,
-            assessment.is_neurosymbolic,
-            assessment.key_development,
-            assessment.contribution,
-            datetime.now().isoformat()
-        ))
+        try:
+            cursor.execute('''
+            INSERT OR REPLACE INTO paper_assessments
+            (paper_id, is_neurosymbolic, is_development, paper_type, summary, takeaways, assessment_date)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                paper_id,
+                assessment['is_neurosymbolic'],
+                assessment['is_development'],
+                assessment['paper_type'],
+                assessment['summary'],
+                assessment['takeaways'],
+                datetime.now().isoformat()
+            ))
 
-        self.conn.commit()
+            self.conn.commit()
+            logger.info(f"Assessment saved for paper {paper_id}")
+
+        except KeyError as e:
+            logger.error(f"Missing key in assessment dict: {e}")
+            logger.error(f"Assessment dict contents: {assessment}")
+        except Exception as e:
+            logger.error(f"Error saving assessment: {e}")
 
 
     def process_directory(self, directory_path: str):
-        """
-        Method to process all PDFs in the specified directory.
-        """
+        """Process all PDFs in directory with error handling"""
         pdf_files = Path(directory_path).glob('*.pdf')
 
         for pdf_path in pdf_files:
-            print(f"\nProcessing {pdf_path.name}...")
+            logger.info(f"\nProcessing {pdf_path.name}...")
 
-            # Find paper ID (using DOI or title fallback)
-            paper_id = self.find_paper_id(str(pdf_path))
-            print("Paper ID -> ", paper_id)
-            if not paper_id:
-                print(f"No matching paper found for {pdf_path.name}, skipping...")
+            try:
+                # Find paper ID
+                paper_id = self.find_paper_id(str(pdf_path))
+                logger.info(f"Paper ID -> {paper_id}")
+
+                if not paper_id:
+                    logger.warning(f"No matching paper found for {pdf_path.name}, skipping...")
+                    continue
+
+                # Check page count
+                with open(pdf_path, 'rb') as file:
+                    pdf = PyPDF2.PdfReader(file)
+                    if len(pdf.pages) > 40:
+                        logger.warning(f"Skipping {pdf_path} due to excessive page count")
+                        self._mark_paper_unprocessed(paper_id)
+                        continue
+
+                # Process PDF
+                assessment = self.process_pdf(str(pdf_path))
+                if assessment:
+                    self.save_assessment(paper_id, assessment)
+                    self._mark_paper_processed(paper_id, str(pdf_path))
+                else:
+                    logger.warning(f"No assessment generated for {pdf_path.name}")
+
+            except Exception as e:
+                logger.error(f"Error processing {pdf_path.name}: {e}")
                 continue
 
-            # Process PDF and save assessment
-            assessment = self.process_pdf(str(pdf_path))
-            if assessment:
-                self.save_assessment(paper_id, assessment)
-                print(f"Assessment saved for {pdf_path.name}")
+        logger.info("All PDFs processed.")
+        self.conn.commit()
 
-                # Save the path in the database
-                cursor = self.conn.cursor()
-                cursor.execute('''
-                    UPDATE papers
-                    SET file_path = ?
-                    WHERE id = ?
-                ''', (str(pdf_path), paper_id))
+    def _mark_paper_processed(self, paper_id: int, file_path: str):
+        """Mark paper as processed in database"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            UPDATE papers
+            SET file_path = ?, processed = 1
+            WHERE id = ?
+        ''', (file_path, paper_id))
+        self.conn.commit()
 
-            else:
-                print(f"Failed to process {pdf_path.name}")
+    def _mark_paper_unprocessed(self, paper_id: int):
+        """Mark paper as not processed in database"""
+        cursor = self.conn.cursor()
+        cursor.execute('''
+            UPDATE papers
+            SET processed = 0
+            WHERE id = ?
+        ''', (paper_id,))
+        self.conn.commit()

@@ -51,6 +51,7 @@ def setup_database(db_path: str = 'literature.db'):
         volume TEXT,
         publication_type TEXT, 
         publication_source TEXT,
+        processed BOOLEAN DEFAULT 0, 
         file_path TEXT DEFAULT NULL 
     )
     """)
@@ -60,8 +61,10 @@ def setup_database(db_path: str = 'literature.db'):
     CREATE TABLE IF NOT EXISTS paper_assessments (
         paper_id INTEGER PRIMARY KEY,
         is_neurosymbolic BOOLEAN,
-        key_development BOOLEAN,
-        contribution TEXT,
+        is_development BOOLEAN,  
+        paper_type TEXT,
+        summary TEXT,
+        takeaways TEXT, 
         assessment_date TIMESTAMP,
         FOREIGN KEY (paper_id) REFERENCES papers (id)
     )
