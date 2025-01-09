@@ -6,11 +6,14 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
+import json
+import numpy as np
 from dotenv import find_dotenv, load_dotenv
 from process_papers import PdfProcessor
 from pathlib import Path
 from import_citations import CitationProcessor
 from view_paper import papers_view
+from datetime import datetime
 
 
 @st.cache_resource
@@ -123,6 +126,62 @@ def process_papers():
         processor.close()
 
 
+class NumpyEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        if isinstance(obj, np.floating):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
+def display_papers_tab(papers_df):
+    """Display the papers tab with basic statistics and visualizations."""
+    st.title("Papers")
+
+    # Basic statistics
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Papers", len(papers_df))
+    with col2:
+        st.metric("Unique Venues", papers_df['venue'].nunique())
+    with col3:
+        st.metric("Year Range", f"{papers_df['publication_year'].min()}-{papers_df['publication_year'].max()}")
+
+    # Publications per year
+    st.subheader("Publications per Year")
+    year_counts = papers_df['publication_year'].value_counts().sort_index()
+    fig = px.bar(x=year_counts.index, y=year_counts.values)
+    fig.update_layout(xaxis_title="Year", yaxis_title="Number of Publications")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Top venues
+    st.subheader("Top Publication Venues")
+    venue_counts = papers_df['venue'].value_counts().head(10)
+    fig = px.bar(x=venue_counts.values, y=venue_counts.index, orientation='h')
+    fig.update_layout(xaxis_title="Number of Publications", yaxis_title="Venue")
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Publication sources distribution
+    st.subheader("Distribution by Publication Source")
+    source_counts = papers_df['publication_source'].value_counts()
+    fig = px.pie(values=source_counts.values, names=source_counts.index)
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Interactive table
+    st.subheader("Papers Database")
+    st.dataframe(
+        papers_df[[
+            'title', 'authors', 'publication_year', 'venue', 
+            'publication_type', 'publication_source', 'doi'
+        ]],
+        hide_index=True,
+        use_container_width=True
+    )
+
+
 def add_paper():
     st.title("Add Paper")
 
@@ -164,11 +223,173 @@ def add_paper():
                 conn.close()
 
 
+def create_filters(papers_df):
+    """Create filter widgets that can be used across tabs"""
+    filters = {}
+    
+    with st.sidebar:
+        st.header("Filters")
+        
+        # Year filter
+        years = sorted(papers_df['publication_year'].dropna().unique(), reverse=True)
+        filters['years'] = st.multiselect(
+            "Publication Years",
+            years,
+            default=years
+        )
+        
+        # Paper type filter - handle NULL values
+        paper_types = papers_df['paper_type'].dropna().unique().tolist()
+        paper_types = ["All"] + sorted([pt for pt in paper_types if pd.notna(pt) and pt != ''])
+        filters['paper_type'] = st.selectbox(
+            "Paper Type",
+            paper_types
+        )
+        
+        # Focus filter
+        filters['focus'] = st.radio(
+            "Neurosymbolic Focus",
+            ["All", "Yes", "No"]
+        )
+        
+        # Development filter
+        filters['development'] = st.radio(
+            "Key Development",
+            ["All", "Yes", "No"]
+        )
+    
+    return filters
+
+
+def apply_filters(df, filters):
+    """Apply filters to a dataframe"""
+    filtered_df = df.copy()
+    
+    # Handle year filter
+    if filters['years']:
+        filtered_df = filtered_df[filtered_df['publication_year'].isin(filters['years'])]
+    
+    # Handle paper type filter - consider NULL values
+    if filters['paper_type'] != "All":
+        filtered_df = filtered_df[
+            (filtered_df['paper_type'] == filters['paper_type']) & 
+            (filtered_df['paper_type'].notna())
+        ]
+    
+    # Handle focus filter
+    if filters['focus'] != "All":
+        is_yes = filters['focus'] == "Yes"
+        filtered_df = filtered_df[
+            filtered_df['is_neurosymbolic'].fillna(False) == is_yes
+        ]
+    
+    # Handle development filter
+    if filters['development'] != "All":
+        is_yes = filters['development'] == "Yes"
+        filtered_df = filtered_df[
+            filtered_df['is_development'].fillna(False) == is_yes
+        ]
+    
+    return filtered_df
+
+
+def display_assessments_tab(papers_df, filters):
+    """Display the assessments tab with visualizations"""
+    st.title("Paper Assessments")
+    
+    filtered_df = apply_filters(papers_df, filters)
+    
+    # Basic statistics with filtered data
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric(
+            "Total Papers",
+            len(filtered_df),
+            delta=f"{len(filtered_df) - len(papers_df)} from total"
+        )
+    with col2:
+        if 'is_neurosymbolic' in filtered_df.columns:
+            neurosymbolic_count = len(filtered_df[filtered_df['is_neurosymbolic'] == True])
+            st.metric("Neurosymbolic Papers", neurosymbolic_count)
+        else:
+            st.metric("Neurosymbolic Papers", "N/A")
+    with col3:
+        if 'is_development' in filtered_df.columns:
+            dev_count = len(filtered_df[filtered_df['is_development'] == True])
+            st.metric("Key Developments", dev_count)
+        else:
+            st.metric("Key Developments", "N/A")
+    
+    # Convert to regular Python types for JSON serialization
+    filtered_data = filtered_df.to_dict(orient='records')
+    filters_json = {k: [int(x) if isinstance(x, np.integer) else x for x in v] 
+                   if isinstance(v, (list, np.ndarray)) else v 
+                   for k, v in filters.items()}
+    
+    # Additional text-based insights
+    st.subheader("Key Insights")
+    
+    with st.expander("Publication Trends"):
+        yearly_counts = filtered_df['publication_year'].value_counts().sort_index()
+        st.line_chart(yearly_counts)
+        
+        if len(yearly_counts) > 1:
+            growth = ((yearly_counts.iloc[-1] / yearly_counts.iloc[0]) - 1) * 100
+            st.write(f"Publication growth rate: {growth:.1f}%")
+    
+    with st.expander("Development Analysis"):
+        if 'is_development' in filtered_df.columns and 'paper_type' in filtered_df.columns:
+            # Create a mask for development papers
+            dev_mask = filtered_df['is_development'].fillna(False) == True
+            if dev_mask.any():  # Check if there are any development papers
+                dev_by_type = filtered_df[dev_mask]['paper_type'].value_counts()
+                st.write("Distribution of key developments by paper type:")
+                if not dev_by_type.empty:
+                    st.bar_chart(dev_by_type)
+                else:
+                    st.write("No development papers found in the current selection.")
+            else:
+                st.write("No development papers found in the current selection.")
+        else:
+            st.write("Development information not available.")
+    
+    # Paper Types Distribution
+    with st.expander("Paper Types Distribution"):
+        if 'paper_type' in filtered_df.columns:
+            type_counts = filtered_df['paper_type'].value_counts()
+            if not type_counts.empty:
+                fig = px.pie(
+                    values=type_counts.values,
+                    names=type_counts.index,
+                    title="Distribution of Paper Types"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.write("No paper type information available.")
+        else:
+            st.write("Paper type information not available.")
+    
+    # Venue Analysis
+    with st.expander("Venue Analysis"):
+        venue_counts = filtered_df['venue'].value_counts().head(10)
+        if not venue_counts.empty:
+            fig = px.bar(
+                x=venue_counts.values,
+                y=venue_counts.index,
+                orientation='h',
+                title="Top 10 Publication Venues"
+            )
+            fig.update_layout(yaxis_title="Venue", xaxis_title="Number of Papers")
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.write("No venue information available.")
+
+
 def main():
     load_dotenv(find_dotenv())
     st.set_page_config(
         page_title="Literature Dashboard",
-        initial_sidebar_state="collapsed",
+        initial_sidebar_state="expanded",
         layout="wide"
     )
 
@@ -184,129 +405,32 @@ def main():
             with st.spinner("Processing papers..."):
                 process_papers()
 
+    try:
+        papers_df = load_data("""
+            SELECT p.*, a.*
+            FROM papers p
+            LEFT JOIN paper_assessments a ON p.id = a.paper_id
+        """)
+    except sqlite3.OperationalError:
+        st.error("Please import citations and process papers first!")
+        st.stop()
+
+    # Create filters that will be used across tabs
+    filters = create_filters(papers_df)
+
+    # Create tabs
     papers_tab, assessments_tab, papers_view_tab, add_paper_tab = st.tabs(
         ["Papers", "Aggregated Assessments", "Paper Assessments", "Add Paper"])
 
-    # Add CSS for better styling
-    st.markdown("""
-        <style>
-            .stMetric {
-                padding: 10px;
-                border-radius: 5px;
-            }
-            .stMetric > div {
-                display: flex;
-                justify-content: center;
-            }
-        </style>
-        """, unsafe_allow_html=True)
-
-    # Papers tab that displays basic statistics about the papers in the database.
     with papers_tab:
-        st.title("Papers")
+        filtered_df = apply_filters(papers_df, filters)
+        display_papers_tab(filtered_df)
 
-        try:
-            papers_df = load_data("SELECT * FROM papers")
-        except sqlite3.OperationalError:
-            st.error("Please import citations first!")
-
-            if st.button("Import Citations"):
-                with st.spinner("Importing citations..."):
-                    import_citations()
-
-            st.stop()
-
-        # Basic statistics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Papers", len(papers_df))
-        with col2:
-            st.metric("Unique Venues", papers_df['venue'].nunique())
-        with col3:
-            st.metric("Year Range", f"{papers_df['publication_year'].min()}-{papers_df['publication_year'].max()}")
-
-        # Publications per year
-        st.subheader("Publications per Year")
-        year_counts = papers_df['publication_year'].value_counts().sort_index()
-        fig = px.bar(x=year_counts.index, y=year_counts.values)
-        fig.update_layout(xaxis_title="Year", yaxis_title="Number of Publications")
-        st.plotly_chart(fig)
-
-        # Top venues
-        st.subheader("Top Publication Venues")
-        venue_counts = papers_df['venue'].value_counts().head(10)
-        fig = px.bar(x=venue_counts.values, y=venue_counts.index, orientation='h')
-        fig.update_layout(xaxis_title="Number of Publications", yaxis_title="Venue")
-        st.plotly_chart(fig)
-
-        # Interactive table
-        st.subheader("Papers Database")
-        st.dataframe(papers_df)
-
-
-    # Assessment tab that displays aggregated statistics about the papers in the database.
     with assessments_tab:
-        st.title("Paper Assessments")
-
-        try:
-            assessments_df = load_data("""
-                SELECT a.*, p.title, p.authors, p.publication_year
-                FROM paper_assessments a
-                LEFT JOIN papers p ON a.paper_id = p.doi
-            """)
-        except sqlite3.OperationalError:
-            st.error("Please process papers first!")
-
-            if st.button("Process Papers"):
-                with st.spinner("Processing papers..."):
-                    process_papers()
-
-            st.stop()
-
-        # Basic statistics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Assessments", len(assessments_df))
-        with col2:
-            if 'is_neurosymbolic' in assessments_df.columns:
-                neurosymbolic_count = len(assessments_df[assessments_df['is_neurosymbolic'] == 1])
-                st.metric("Neurosymbolic Papers", neurosymbolic_count)
-            else:
-                st.metric("Neurosymbolic Papers", "N/A")
-        with col3:
-            if 'key_development' in assessments_df.columns:
-                key_dev_count = len(assessments_df[assessments_df['key_development'] == 1])
-                st.metric("Key Developments", key_dev_count)
-            else:
-                st.metric("Key Developments", "N/A")
-
-        # Quality score distribution
-        if 'quality_score' in assessments_df.columns:
-            st.subheader("Quality Score Distribution")
-            score_counts = assessments_df['quality_score'].value_counts().sort_index()
-            if not score_counts.empty:
-                fig = px.bar(x=score_counts.index, y=score_counts.values)
-                fig.update_layout(xaxis_title="Quality Score", yaxis_title="Number of Papers")
-                st.plotly_chart(fig)
-            else:
-                st.info("No quality score data available")
-
-        # Development types
-        if 'development_type' in assessments_df.columns:
-            st.subheader("Development Types")
-            dev_type_counts = assessments_df['development_type'].value_counts()
-            if not dev_type_counts.empty:
-                fig = px.pie(values=dev_type_counts.values, names=dev_type_counts.index)
-                st.plotly_chart(fig)
-            else:
-                st.info("No development type data available")
-
-        # Interactive table
-        st.subheader("Assessment Details")
-        st.dataframe(assessments_df)
+        display_assessments_tab(papers_df, filters)
 
     with papers_view_tab:
-        papers_view()
+        papers_view(filters)
 
     with add_paper_tab:
         add_paper()

@@ -43,6 +43,38 @@ def load_paper_details():
     return pd.read_sql_query(query, conn)
 
 
+def apply_filters(df, filters):
+    """Apply filters to a dataframe"""
+    filtered_df = df.copy()
+    
+    # Handle year filter
+    if filters.get('years'):
+        filtered_df = filtered_df[filtered_df['publication_year'].isin(filters['years'])]
+    
+    # Handle paper type filter - consider NULL values
+    if filters.get('paper_type') and filters['paper_type'] != "All":
+        filtered_df = filtered_df[
+            (filtered_df['paper_type'] == filters['paper_type']) & 
+            (filtered_df['paper_type'].notna())
+        ]
+    
+    # Handle focus filter
+    if filters.get('focus') and filters['focus'] != "All":
+        is_yes = filters['focus'] == "Yes"
+        filtered_df = filtered_df[
+            filtered_df['is_neurosymbolic'].fillna(False) == is_yes
+        ]
+    
+    # Handle development filter
+    if filters.get('development') and filters['development'] != "All":
+        is_yes = filters['development'] == "Yes"
+        filtered_df = filtered_df[
+            filtered_df['is_development'].fillna(False) == is_yes
+        ]
+    
+    return filtered_df
+
+
 def display_paper_details(paper, papers_dir: str = "papers"):
     """Display detailed information about a single paper."""
     st.header("Paper Details")
@@ -95,13 +127,14 @@ def display_paper_details(paper, papers_dir: str = "papers"):
         st.markdown(paper['takeaways'])
 
     # Assessment metadata
-    st.caption(f"Assessment performed on: {pd.to_datetime(paper['assessment_date']).strftime('%Y-%m-%d %H:%M')}")
+    if pd.notna(paper['assessment_date']):
+        st.caption(f"Assessment performed on: {pd.to_datetime(paper['assessment_date']).strftime('%Y-%m-%d %H:%M')}")
 
     # PDF link if available
     if pd.notna(paper['file_path']):
         file_name = Path(paper['file_path']).name
         full_path = Path(papers_dir) / file_name
-
+        
         if full_path.exists():
             with open(full_path, "rb") as pdf_file:
                 pdf_bytes = pdf_file.read()
@@ -111,13 +144,13 @@ def display_paper_details(paper, papers_dir: str = "papers"):
                     file_name=file_name,
                     mime="application/pdf"
                 )
-
+            
             # Optionally, display PDF in iframe if desired
             st.markdown("### PDF Preview")
             st.markdown(f'<iframe src="data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode()}" width="100%" height="800px"></iframe>', unsafe_allow_html=True)
 
 
-def papers_view():
+def papers_view(filters=None):
     """Main function for the papers view page."""
     st.title("Paper Assessments")
 
@@ -132,59 +165,15 @@ def papers_view():
         st.warning("No processed paper assessments found in the database.")
         st.stop()
 
-    # Sidebar filters
-    st.sidebar.header("Filters")
+    # Apply filters if provided
+    if filters:
+        filtered_df = apply_filters(papers_df, filters)
+    else:
+        filtered_df = papers_df
 
-    # Year filter
-    years = sorted(papers_df['publication_year'].unique(), reverse=True)
-    selected_years = st.sidebar.multiselect(
-        "Publication Years",
-        years,
-        default=years
-    )
-
-    # Paper type filter
-    paper_types = ["All"] + sorted(papers_df['paper_type'].unique().tolist())
-    selected_type = st.sidebar.selectbox(
-        "Paper Type",
-        paper_types
-    )
-
-    # Focus filter
-    focus_filter = st.sidebar.radio(
-        "Neurosymbolic Focus",
-        ["All", "Yes", "No"]
-    )
-
-    # Development filter
-    dev_filter = st.sidebar.radio(
-        "Key Development",
-        ["All", "Yes", "No"]
-    )
-
-    # Apply filters
-    filtered_df = papers_df[
-        papers_df['publication_year'].isin(selected_years)
-    ]
-
-    if selected_type != "All":
-        filtered_df = filtered_df[
-            filtered_df['paper_type'] == selected_type
-            ]
-
-    if focus_filter != "All":
-        filtered_df = filtered_df[
-            filtered_df['is_neurosymbolic'] == (focus_filter == "Yes")
-            ]
-
-    if dev_filter != "All":
-        filtered_df = filtered_df[
-            filtered_df['is_development'] == (dev_filter == "Yes")
-            ]
-
-    # Display stats
-    st.sidebar.markdown("---")
-    st.sidebar.markdown(f"**Showing {len(filtered_df)} of {len(papers_df)} papers**")
+    # Show number of filtered papers
+    if filters:
+        st.info(f"Showing {len(filtered_df)} of {len(papers_df)} papers based on current filters")
 
     # Paper selection
     selected_paper_title = st.selectbox(
