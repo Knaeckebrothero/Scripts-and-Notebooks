@@ -8,6 +8,9 @@ import sqlite3
 import plotly.express as px
 import json
 import numpy as np
+import plotly.graph_objects as go
+import plotly.express as px
+import networkx as nx
 from dotenv import find_dotenv, load_dotenv
 from process_papers import PdfProcessor
 from pathlib import Path
@@ -385,6 +388,233 @@ def display_assessments_tab(papers_df, filters):
             st.write("No venue information available.")
 
 
+@st.cache_data
+def load_keyword_data():
+    """Load keyword data with relationships and paper metadata"""
+    conn = get_connection()
+    query = """
+    SELECT 
+        k.keyword,
+        k.id as keyword_id,
+        p.publication_year,
+        p.id as paper_id,
+        p.publication_source,
+        pa.paper_type,
+        pa.is_neurosymbolic
+    FROM keywords k
+    JOIN rel_keywords_papers r ON k.id = r.keyword_id
+    JOIN papers p ON r.paper_id = p.id
+    LEFT JOIN paper_assessments pa ON p.id = pa.paper_id
+    """
+    return pd.read_sql_query(query, conn)
+
+
+@st.cache_data
+def process_keyword_network(df, max_nodes=30):
+    """Process keyword data for network visualization with size limits"""
+    # Get top keywords first to limit network size
+    top_keywords = df['keyword'].value_counts().head(max_nodes).index
+    df_filtered = df[df['keyword'].isin(top_keywords)]
+    
+    # Create co-occurrence matrix
+    paper_keyword_groups = df_filtered.groupby('paper_id')['keyword'].agg(list)
+    keyword_pairs = []
+    
+    for keywords in paper_keyword_groups:
+        if len(keywords) > 1:  # Only process if there are at least 2 keywords
+            for i in range(len(keywords)):
+                for j in range(i + 1, len(keywords)):
+                    keyword_pairs.append(tuple(sorted([keywords[i], keywords[j]])))
+    
+    # Count co-occurrences
+    co_occurrences = pd.DataFrame(
+        keyword_pairs, 
+        columns=['source', 'target']
+    ).value_counts().reset_index()
+    co_occurrences.columns = ['source', 'target', 'weight']
+    
+    return co_occurrences
+
+
+@st.cache_data
+def process_temporal_evolution(df, top_n=10):
+    """Process keyword data for temporal evolution"""
+    top_keywords = df['keyword'].value_counts().head(top_n).index
+    mask = df['keyword'].isin(top_keywords)
+    return df[mask].groupby(['publication_year', 'keyword']).size().reset_index(name='count')
+
+
+@st.cache_data
+def process_keyword_frequency(df, top_n=20):
+    """Process keyword frequency data"""
+    return df['keyword'].value_counts().head(top_n).reset_index()
+
+
+def display_keywords_tab(papers_df, filters):
+    """Display the keywords analysis tab"""
+    st.title("Keyword Analysis")
+    
+    with st.spinner("Loading keyword data..."):
+        keyword_data = load_keyword_data()
+        filtered_df = apply_filters(papers_df, filters)
+        filtered_keywords = keyword_data[
+            keyword_data['paper_id'].isin(filtered_df['id'])
+        ]
+    
+    if filtered_keywords.empty:
+        st.warning("No keyword data available for the current selection.")
+        return
+    
+    # Add controls for visualization parameters
+    with st.expander("Visualization Settings"):
+        col1, col2 = st.columns(2)
+        with col1:
+            max_nodes = st.slider("Max number of keywords in network", 5, 50, 30)
+            top_n_temporal = st.slider("Number of keywords in temporal view", 5, 20, 10)
+        with col2:
+            top_n_freq = st.slider("Number of keywords in frequency view", 5, 50, 20)
+            min_cooccurrence = st.slider("Minimum co-occurrence strength", 1, 10, 2)
+    
+    # Create two columns for the top section
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("Keyword Co-occurrence Network")
+        with st.spinner("Generating network visualization..."):
+            network_data = process_keyword_network(filtered_keywords, max_nodes)
+            network_data = network_data[network_data['weight'] >= min_cooccurrence]
+            
+            if network_data.empty:
+                st.warning("Not enough co-occurring keywords found with current settings.")
+                return
+            
+            import networkx as nx
+            G = nx.from_pandas_edgelist(
+                network_data, 
+                'source', 
+                'target', 
+                edge_attr='weight'
+            )
+            
+            if len(G.nodes()) > 0:
+                pos = nx.spring_layout(G, k=1/np.sqrt(len(G.nodes())), iterations=50)
+                
+                # Create separate traces for each edge with weight-dependent width
+                edge_traces = []
+                for edge in G.edges(data=True):
+                    x0, y0 = pos[edge[0]]
+                    x1, y1 = pos[edge[1]]
+                    weight = edge[2].get('weight', 1)
+                    
+                    edge_trace = go.Scatter(
+                        x=[x0, x1],
+                        y=[y0, y1],
+                        line=dict(
+                            width=weight/network_data['weight'].max() * 5,
+                            color='#888'
+                        ),
+                        hoverinfo='text',
+                        text=f"Weight: {weight}",
+                        mode='lines'
+                    )
+                    edge_traces.append(edge_trace)
+
+                # Create nodes trace
+                node_x = [pos[node][0] for node in G.nodes()]
+                node_y = [pos[node][1] for node in G.nodes()]
+                node_text = list(G.nodes())
+                
+                node_trace = go.Scatter(
+                    x=node_x,
+                    y=node_y,
+                    mode='markers+text',
+                    hoverinfo='text',
+                    text=node_text,
+                    textposition="top center",
+                    marker=dict(
+                        size=10,
+                        color='lightblue',
+                        line_width=2
+                    )
+                )
+
+                # Combine all traces
+                fig = go.Figure(
+                    data=edge_traces + [node_trace],
+                    layout=go.Layout(
+                        showlegend=False,
+                        hovermode='closest',
+                        margin=dict(b=0,l=0,r=0,t=0),
+                        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False)
+                    )
+                )
+                
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("Not enough connected keywords to create network visualization")
+
+    with col2:
+        st.subheader("Keyword Frequency")
+        with st.spinner("Generating frequency visualization..."):
+            freq_data = process_keyword_frequency(filtered_keywords, top_n_freq)
+            fig = px.bar(
+                freq_data, 
+                x='count', 
+                y='keyword',
+                orientation='h',
+                title='Most Common Keywords'
+            )
+            fig.update_layout(yaxis={'categoryorder':'total ascending'})
+            st.plotly_chart(fig, use_container_width=True)
+    
+    st.subheader("Temporal Keyword Evolution")
+    with st.spinner("Generating temporal visualization..."):
+        temporal_data = process_temporal_evolution(filtered_keywords, top_n_temporal)
+        fig = px.line(
+            temporal_data,
+            x='publication_year',
+            y='count',
+            color='keyword',
+            title='Keyword Usage Over Time'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Add export functionality
+    st.subheader("Export Data")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        csv = network_data.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "Download Co-occurrence Data",
+            csv,
+            "keyword_network.csv",
+            "text/csv",
+            key='download-network'
+        )
+        
+    with col2:
+        csv = temporal_data.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "Download Temporal Data",
+            csv,
+            "keyword_temporal.csv",
+            "text/csv",
+            key='download-temporal'
+        )
+        
+    with col3:
+        csv = freq_data.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            "Download Frequency Data",
+            csv,
+            "keyword_frequency.csv",
+            "text/csv",
+            key='download-frequency'
+        )
+
+
 def main():
     load_dotenv(find_dotenv())
     st.set_page_config(
@@ -419,8 +649,9 @@ def main():
     filters = create_filters(papers_df)
 
     # Create tabs
-    papers_tab, assessments_tab, papers_view_tab, add_paper_tab = st.tabs(
-        ["Papers", "Aggregated Assessments", "Paper Assessments", "Add Paper"])
+    papers_tab, assessments_tab, keywords_tab, papers_view_tab, add_paper_tab = st.tabs([
+        "Papers", "Aggregated Assessments", "Keyword Analysis", "Paper Assessments", "Add Paper"
+    ])
 
     with papers_tab:
         filtered_df = apply_filters(papers_df, filters)
@@ -434,6 +665,9 @@ def main():
 
     with add_paper_tab:
         add_paper()
+
+    with keywords_tab:
+        display_keywords_tab(papers_df, filters)
 
 
 if __name__ == "__main__":

@@ -11,3 +11,5 @@ pandas
 plotly
 bibtexparser
 replicate
+networkx
+scipy
