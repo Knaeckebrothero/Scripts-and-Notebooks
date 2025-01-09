@@ -4,6 +4,7 @@ Streamlit page for viewing individual paper assessments from the SLR database.
 import streamlit as st
 import pandas as pd
 import sqlite3
+import base64
 from pathlib import Path
 
 
@@ -42,7 +43,7 @@ def load_paper_details():
     return pd.read_sql_query(query, conn)
 
 
-def display_paper_details(paper):
+def display_paper_details(paper, papers_dir: str = "papers"):
     """Display detailed information about a single paper."""
     st.header("Paper Details")
 
@@ -98,9 +99,22 @@ def display_paper_details(paper):
 
     # PDF link if available
     if pd.notna(paper['file_path']):
-        pdf_path = Path(paper['file_path'])
-        if pdf_path.exists():
-            st.markdown(f"[View PDF]({pdf_path})")
+        file_name = Path(paper['file_path']).name
+        full_path = Path(papers_dir) / file_name
+
+        if full_path.exists():
+            with open(full_path, "rb") as pdf_file:
+                pdf_bytes = pdf_file.read()
+                st.download_button(
+                    label="Download PDF",
+                    data=pdf_bytes,
+                    file_name=file_name,
+                    mime="application/pdf"
+                )
+
+            # Optionally, display PDF in iframe if desired
+            st.markdown("### PDF Preview")
+            st.markdown(f'<iframe src="data:application/pdf;base64,{base64.b64encode(pdf_bytes).decode()}" width="100%" height="800px"></iframe>', unsafe_allow_html=True)
 
 
 def papers_view():
