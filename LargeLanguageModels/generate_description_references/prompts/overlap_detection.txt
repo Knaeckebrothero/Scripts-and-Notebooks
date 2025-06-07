@@ -1,0 +1,69 @@
+Analyze these business capabilities to identify any overlaps with the target capability.
+
+TARGET CAPABILITY:
+- Name: {capability_name}
+- Category: {capability_category}
+- Level: {capability_level}
+- Description: {capability_description}
+{parent_info}
+
+{comparison_context}
+
+For each capability in the comparison list, determine if there is:
+1. DUPLICATE: Same capability with different name (90%+ overlap)
+2. MAJOR OVERLAP: Significant functional overlap (60-90% overlap)
+3. MINOR OVERLAP: Some shared activities (30-60% overlap)
+4. RELATED: Related but distinct (10-30% overlap)
+5. NO OVERLAP: Completely different capabilities (<10% overlap)
+
+Consider:
+- Functional scope overlap
+- Similar activities or outcomes
+- Whether they could/should be merged
+- Whether one encompasses the other
+
+For each overlap found (DUPLICATE, MAJOR, or MINOR), provide:
+OVERLAP:
+Capability: [Name of overlapping capability]
+Type: [DUPLICATE/MAJOR/MINOR]
+Overlap Percentage: [Estimated %]
+Explanation: [Why they overlap]
+Recommendation: [Merge/Keep separate/Clarify boundaries]
+
+Only report overlaps that are MINOR or greater.
+
+Analysis Guidelines:
+
+DUPLICATE (90%+ overlap):
+- Essentially the same capability with different naming
+- No meaningful functional difference
+- Would cause redundancy if both kept
+- Clear candidate for merging
+- Example: "HR Management" vs "Human Resources Management"
+
+MAJOR OVERLAP (60-90%):
+- Substantial shared functionality
+- Some unique aspects to each
+- Unclear boundaries between them
+- May need to merge or clearly differentiate
+- Example: "Customer Management" vs "Customer Relationship Management"
+
+MINOR OVERLAP (30-60%):
+- Some shared activities or resources
+- Mostly distinct purposes
+- May share some sub-capabilities
+- Usually keep separate but clarify boundaries
+- Example: "Financial Planning" vs "Budgeting"
+
+Recommendations should be:
+- For DUPLICATE: "Merge these capabilities into a single capability"
+- For MAJOR: "Either merge or clearly differentiate boundaries and responsibilities"
+- For MINOR: "Keep separate but clarify boundaries to avoid confusion"
+
+Special Considerations:
+1. Level 2 capabilities under the same parent are expected to be complementary, not overlapping
+2. Capabilities in different categories (Core/Guiding/Enabling) may have natural touchpoints
+3. Consider industry best practices for capability separation
+4. Think about organizational clarity and avoiding confusion
+
+Focus on functional overlap, not just name similarity. Two capabilities might have similar names but serve very different purposes, or have different names but duplicate functionality.

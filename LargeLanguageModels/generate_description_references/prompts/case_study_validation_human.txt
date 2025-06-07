@@ -1,0 +1,33 @@
+Analyze the following case study to validate this business capability:
+
+CAPABILITY TO VALIDATE:
+- Name: {capability_name}
+- Level: {capability_level}
+- Category: {capability_category}
+- Description: {capability_description}
+
+CASE STUDY:
+{case_study}
+
+Please analyze whether this capability is justified by the case study. Find specific evidence, quotes, and references that support the need for this capability.
+
+Instructions:
+1. Search thoroughly through the entire case study for evidence related to this capability
+2. Look for both explicit mentions and implicit indicators
+3. Consider current operations, future plans, and identified challenges
+4. Examine all aspects: business operations, organizational structure, IT systems, and strategic initiatives
+5. Evaluate evidence quality and assign appropriate relevance scores
+
+For each piece of evidence found:
+- Provide the EXACT quote from the case study
+- Identify where in the case study this appears (section/context)
+- Explain the connection to the capability
+- Rate the relevance (0.0-1.0)
+
+After reviewing all evidence:
+- Determine if the capability is justified (true/false)
+- Provide an overall summary of why or why not the capability is justified
+- List any related departments or teams mentioned
+- List any related IT systems mentioned
+
+Be objective and thorough. If little or no evidence exists for this capability, state that clearly rather than forcing connections. Quality of evidence matters more than quantity.

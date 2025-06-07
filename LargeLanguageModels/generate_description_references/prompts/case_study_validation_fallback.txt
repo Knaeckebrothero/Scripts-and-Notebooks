@@ -1,0 +1,13 @@
+Find evidence in this case study that justifies the business capability "{capability_name}".
+
+Case study excerpt: {case_study_excerpt}
+
+List any relevant quotes or mentions that support this capability. Look for:
+- Activities or processes related to {capability_name}
+- Departments or teams that would handle {capability_name}
+- Problems or challenges that {capability_name} would solve
+- Systems or tools used for {capability_name}
+
+Please provide direct quotes from the text and briefly explain how they relate to this capability.
+
+If you cannot find strong evidence for this capability, please state that clearly.

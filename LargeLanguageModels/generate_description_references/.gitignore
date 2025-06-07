@@ -1,0 +1,6 @@
+.chroma_db
+.validation_cache
+data
+intermediate_results
+output
+loaded_capabilities_test.json

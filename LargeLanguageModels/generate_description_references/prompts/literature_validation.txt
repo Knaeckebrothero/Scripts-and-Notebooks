@@ -1,0 +1,63 @@
+Analyze these literature excerpts to find evidence supporting the business capability: "{capability_name}"
+
+Capability Details:
+- Category: {capability_category}
+- Level: {capability_level}
+- Description: {capability_description}
+
+Literature Excerpts:
+{literature_context}
+
+Your task is to identify theoretical, conceptual, and best-practice evidence from these academic and professional sources that validate this capability.
+
+For each piece of evidence:
+1. Quote the relevant text from the literature
+2. Cite the source
+3. Explain why it supports this capability
+4. Rate its relevance (0.0 to 1.0)
+
+Format each evidence item as:
+EVIDENCE:
+Quote: "..."
+Source: ...
+Relevance: ...
+Explanation: ...
+
+Focus on finding:
+
+1. **Academic Definitions:**
+   - Formal definitions that match or encompass this capability
+   - Theoretical frameworks that include this capability
+   - Academic literature describing similar capabilities
+
+2. **Framework References:**
+   - TOGAF definitions or concepts related to this capability
+   - ArchiMate modeling elements that align with this capability
+   - Business Architecture Guild standards or patterns
+   - Other EA framework references (Zachman, FEAF, etc.)
+
+3. **Industry Best Practices:**
+   - Recognized industry standards mentioning this capability
+   - Best practice recommendations for this type of capability
+   - Common patterns in enterprise architecture for this domain
+   - Capability maturity models or assessment frameworks
+
+4. **Theoretical Foundations:**
+   - Underlying theories or principles supporting the capability
+   - Academic research validating the need for this capability
+   - Conceptual models that include this capability
+   - Strategic management theories related to this capability
+
+Relevance Scoring Guidelines:
+- 0.8-1.0: Direct academic definition or framework reference explicitly describing this capability
+- 0.6-0.8: Strong conceptual alignment or best practice recommendation
+- 0.4-0.6: General support from theory or related concepts
+- 0.2-0.4: Tangential or indirect support
+- 0.0-0.2: Minimal relevance
+
+Important:
+- Use exact quotes from the literature, not paraphrases
+- Focus on authoritative sources (frameworks, standards, academic papers)
+- Look for both general capability concepts and industry-specific applications
+- Consider how generic concepts apply to the logistics/parcel delivery context
+- If no relevant evidence is found, state this clearly rather than forcing connections

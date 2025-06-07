@@ -1,0 +1,58 @@
+Generate a comprehensive description for this business capability based on the evidence collected.
+
+CAPABILITY DETAILS:
+- Name: {capability_name}
+- Level: {capability_level}
+- Category: {capability_category} (Core = value-creating, Guiding = strategic/directing, Enabling = supporting)
+- Current Description: {capability_description}
+
+EVIDENCE SUMMARY:
+- Total evidence pieces: {total_evidence_count}
+- Case study evidence: {case_study_count} pieces (avg relevance: {case_study_avg_score:.2f})
+- Literature evidence: {literature_count} pieces (avg relevance: {literature_avg_score:.2f})
+- High-relevance evidence (>={min_evidence_score}): {high_relevance_count}
+
+{case_study_context}
+{literature_context}
+
+REQUIREMENTS FOR THE DESCRIPTION:
+1. Start with a clear definition of what this capability enables the organization to do
+2. Explain the business value and why it's needed
+3. Reference specific evidence from both case study and literature where relevant
+4. Keep it concise but comprehensive (2-4 sentences)
+5. Use business language, not technical jargon
+6. Focus on the "what" not the "how"
+7. Make it specific to SpeedParcel's logistics context
+8. If evidence is limited, still provide a meaningful description based on the capability name and category
+
+For a Level {capability_level} capability in the {capability_category} category, ensure the description:
+- {core_description}
+- {guiding_description}
+- {enabling_description}
+- {level_description}
+
+Generate a professional description that would be suitable for an Enterprise Architecture document:
+
+Guidelines for a strong description:
+- Begin with "[Capability Name] enables..." or "This capability provides..."
+- Include the primary business purpose or outcome
+- Mention key activities or functions encompassed by the capability
+- Connect to SpeedParcel's specific context (logistics, parcels, international shipping)
+- If applicable, reference how it supports other capabilities or business objectives
+- Ensure the description is self-contained and understandable without reading the evidence
+
+Style requirements:
+- Write in third person
+- Use present tense
+- Avoid acronyms unless widely understood
+- Be specific rather than generic
+- Balance comprehensiveness with clarity
+
+Quality checks:
+- Does the description clearly convey what the organization can do with this capability?
+- Is the business value evident?
+- Is it specific to SpeedParcel rather than generic?
+- Does it align with the evidence collected?
+- Is it appropriate for the capability's category and level?
+
+Based on all evidence and requirements above, generate the description:
