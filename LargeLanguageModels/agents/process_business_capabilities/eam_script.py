@@ -29,8 +29,6 @@ How Overlap Detection Works:
 Requirements:
 pip install langchain langchain-anthropic chromadb tqdm sentence-transformers
 
-Note: sentence-transformers is required for ChromaDB embeddings
-
 Usage:
 1. Set your Anthropic API key:
    export ANTHROPIC_API_KEY='your-api-key'
@@ -118,7 +116,9 @@ logger = logging.getLogger(__name__)
 
 
 def check_api_key():
-    """Check if Anthropic API key is available"""
+    """
+    Check if Anthropic API key is available
+    """
     if not os.environ.get('ANTHROPIC_API_KEY'):
         logger.error("ANTHROPIC_API_KEY environment variable not set!")
         logger.error("Please set it with: export ANTHROPIC_API_KEY='your-api-key'")
@@ -176,7 +176,7 @@ class ValidatorConfig:
     output_format: str = "json"  # json, markdown, or both
 
     # Prompts configuration
-    prompts_dir: str = "./prompts"  # Directory containing prompt files
+    prompts_dir: str = "prompts"  # Directory containing prompt files
 
 
 @dataclass
