@@ -1,0 +1,76 @@
+{
+  "processes": [
+    {
+      "id": "shipment_pickup",
+      "name": "Shipment Pickup",
+      "category": "Core",
+      "department": "Last Mile Delivery",
+      "description": "Daily pickup of shipments from shipper premises",
+      "input": "Pickup requests, pre-advise data",
+      "output": "Collected parcels, tracking events"
+    },
+    {
+      "id": "sorting_center_operations",
+      "name": "Sorting Center Operations",
+      "category": "Core",
+      "department": "Mail Terminal Operations",
+      "description": "Breaking up consignments and sorting shipments by destination",
+      "input": "Inbound consignments",
+      "output": "Sorted parcels ready for transport"
+    },
+    {
+      "id": "customs_clearance",
+      "name": "Customs Clearance",
+      "category": "Core",
+      "department": "Customs",
+      "description": "Export and import customs processing for international shipments",
+      "input": "Shipment data, customs documents",
+      "output": "Cleared shipments, customs declarations"
+    },
+    {
+      "id": "performance_reporting",
+      "name": "Performance Reporting",
+      "category": "Management",
+      "department": "Performance & Compliance",
+      "description": "Generate KPI reports and business analytics",
+      "input": "Operational data, tracking data",
+      "output": "Performance reports, dashboards"
+    },
+    {
+      "id": "capacity_planning",
+      "name": "Capacity Planning",
+      "category": "Supporting",
+      "department": "Network Management",
+      "description": "Plan and allocate resources for sorting centers and transport",
+      "input": "Volume forecasts, historical data",
+      "output": "Capacity plans, resource allocations"
+    },
+    {
+      "id": "last_mile_delivery",
+      "name": "Last Mile Delivery",
+      "category": "Core",
+      "department": "Last Mile Delivery",
+      "description": "Final delivery to recipients via various channels",
+      "input": "Sorted parcels, delivery routes",
+      "output": "Delivered parcels, proof of delivery"
+    },
+    {
+      "id": "warehouse_fulfillment",
+      "name": "Warehouse Order Fulfillment",
+      "category": "Core",
+      "department": "Order Fulfillment",
+      "description": "Pick, pack and ship orders from warehouse inventory",
+      "input": "Customer orders, inventory",
+      "output": "Packed shipments ready for dispatch"
+    },
+    {
+      "id": "airline_booking",
+      "name": "Airline Capacity Booking",
+      "category": "Supporting",
+      "department": "Airline Booking",
+      "description": "Negotiate and book air cargo capacity for international shipments",
+      "input": "Capacity requirements, flight schedules",
+      "output": "Confirmed bookings, transport plans"
+    }
+  ]
+}

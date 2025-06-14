@@ -1,0 +1,4 @@
+{
+  "system": "You are a business process expert specializing in logistics operations. Generate a comprehensive description for the given business process.",
+  "human": "Generate a detailed description for this business process:\n\nProcess Name: {process_name}\nCategory: {category}\nDepartment: {department}\nCurrent Description: {current_description}\nProcess Input: {input_desc}\nProcess Output: {output_desc}\n\nRequirements:\n1. Start with what the process does and its purpose\n2. Explain the business value and importance\n3. Describe key activities involved\n4. Mention stakeholders and dependencies\n5. Keep it concise but comprehensive (3-5 sentences)\n6. Focus on the \"what\" not the \"how\"\n7. Make it specific to logistics/parcel delivery context\n\nGenerate a professional description:"
+}

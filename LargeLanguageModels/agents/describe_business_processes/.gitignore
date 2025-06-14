@@ -1,5 +1,5 @@
 .chroma_db
 data
-process_analysis_results/*
+process_analysis_results
 analysis_results.md
 processes.json
