@@ -1,0 +1,37 @@
+================================================================
+KURZANLEITUNG - Finanzdaten Stichprobentest
+================================================================
+
+ERSTMALIGE EINRICHTUNG (nur einmal nötig):
+------------------------------------------
+1. ZIP-Datei in einen Ordner entpacken
+2. Doppelklick auf "install.bat"
+3. Warten bis "INSTALLATION ERFOLGREICH" erscheint
+
+ANWENDUNGEN STARTEN:
+-------------------
+• Desktop-Version:    Doppelklick auf "start_standard.bat"
+• Web-Version:        Doppelklick auf "start_erweitert.bat"
+
+VERWENDUNG:
+-----------
+1. Datei laden (CSV oder Excel)
+2. Filter anwenden (optional)
+3. Anzahl Stichproben festlegen
+4. "Stichprobe generieren" klicken
+5. Ergebnisse exportieren
+
+DATENANFORDERUNGEN:
+------------------
+• Format: CSV (Trennzeichen: ;) oder Excel
+• Spalten: id | key figure | value | date
+• Datum: TT-MM-JJJJ (z.B. 31-12-2024)
+• Zahlen: Europäisch (z.B. 1.234,56)
+
+BEI PROBLEMEN:
+-------------
+• Python installiert? (www.python.org)
+• Als Administrator ausführen
+• Ausführliche Anleitung: siehe README.md
+
+================================================================
