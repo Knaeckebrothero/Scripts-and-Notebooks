@@ -87,6 +87,10 @@ class GenericSampleTestingApp:
         self.root.title("Generic CSV Sample Testing Tool")
         self.root.geometry("1200x800")
 
+        # Configure styles
+        style = ttk.Style()
+        style.configure('Accent.TButton', font=('TkDefaultFont', 11, 'bold'))
+
         # Data storage
         self.data = []
         self.column_names = []
@@ -186,8 +190,9 @@ class GenericSampleTestingApp:
         ttk.Button(button_frame, text="Add Rule", command=self.add_rule).grid(row=0, column=0, padx=5)
         ttk.Button(button_frame, text="Edit Rule", command=self.edit_rule).grid(row=0, column=1, padx=5)
         ttk.Button(button_frame, text="Delete Rule", command=self.delete_rule).grid(row=0, column=2, padx=5)
-        ttk.Button(button_frame, text="Save Rules", command=self.save_rules).grid(row=0, column=3, padx=5)
-        ttk.Button(button_frame, text="Load Rules", command=self.load_rules).grid(row=0, column=4, padx=5)
+        ttk.Button(button_frame, text="Quick Add by Year", command=self.add_year_rules).grid(row=0, column=3, padx=5)
+        ttk.Button(button_frame, text="Save Rules", command=self.save_rules).grid(row=0, column=4, padx=5)
+        ttk.Button(button_frame, text="Load Rules", command=self.load_rules).grid(row=0, column=5, padx=5)
 
         # Rules list
         rules_frame = ttk.LabelFrame(self.rules_tab, text="Sampling Rules", padding="10")
@@ -213,12 +218,18 @@ class GenericSampleTestingApp:
         generate_frame = ttk.Frame(self.rules_tab, padding="10")
         generate_frame.grid(row=2, column=0, sticky=(tk.W, tk.E))
 
-        ttk.Button(generate_frame, text="Generate All Samples",
+        # Info about how rules work
+        info_label = ttk.Label(generate_frame,
+                               text="Each rule generates its own sample set independently. Multiple filters within a rule are combined with AND logic.",
+                               font=('TkDefaultFont', 9, 'italic'))
+        info_label.grid(row=0, column=0, columnspan=2, pady=5)
+
+        ttk.Button(generate_frame, text="🎯 Generate All Samples",
                    command=self.generate_all_samples,
-                   style='Accent.TButton').grid(row=0, column=0)
+                   style='Accent.TButton').grid(row=1, column=0, pady=5)
 
         self.progress_label = ttk.Label(generate_frame, text="")
-        self.progress_label.grid(row=0, column=1, padx=20)
+        self.progress_label.grid(row=1, column=1, padx=20)
 
         # Configure grid
         self.rules_tab.columnconfigure(0, weight=1)
@@ -249,7 +260,8 @@ class GenericSampleTestingApp:
         export_frame = ttk.Frame(self.results_tab, padding="10")
         export_frame.grid(row=2, column=0, sticky=(tk.W, tk.E))
 
-        ttk.Button(export_frame, text="Export Results to CSV", command=self.export_results).grid(row=0, column=0)
+        ttk.Button(export_frame, text="Export Results to CSV", command=self.export_results).grid(row=0, column=0, padx=5)
+        ttk.Button(export_frame, text="Clear Results", command=self.clear_results).grid(row=0, column=1, padx=5)
 
         # Configure grid
         self.results_tab.columnconfigure(0, weight=1)
@@ -263,7 +275,12 @@ class GenericSampleTestingApp:
             return ColumnType.UNKNOWN
 
         # Try to parse as dates
-        date_formats = ['%d-%m-%Y', '%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%Y/%m/%d']
+        date_formats = [
+            '%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y',  # European formats
+            '%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d',  # ISO formats
+            '%m/%d/%Y', '%m-%d-%Y', '%m.%d.%Y',  # US formats
+            '%d %b %Y', '%d %B %Y',               # Text month formats
+        ]
         date_count = 0
         for value in values[:20]:  # Check first 20 values
             if not value:
@@ -286,7 +303,7 @@ class GenericSampleTestingApp:
                 continue
             try:
                 # Try both comma and dot as decimal separator
-                float(value.replace(',', '.'))
+                float(value.replace(',', '.').replace(' ', ''))
                 number_count += 1
             except:
                 pass
@@ -303,11 +320,17 @@ class GenericSampleTestingApp:
 
         if col_type == ColumnType.NUMBER:
             try:
-                return float(value.replace(',', '.'))
+                # Remove spaces and convert comma to dot
+                return float(value.replace(',', '.').replace(' ', ''))
             except:
                 return None
         elif col_type == ColumnType.DATE:
-            date_formats = ['%d-%m-%Y', '%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%Y/%m/%d']
+            date_formats = [
+                '%d-%m-%Y', '%d/%m/%Y', '%d.%m.%Y',  # European formats
+                '%Y-%m-%d', '%Y/%m/%d', '%Y.%m.%d',  # ISO formats
+                '%m/%d/%Y', '%m-%d-%Y', '%m.%d.%Y',  # US formats
+                '%d %b %Y', '%d %B %Y',               # Text month formats
+            ]
             for fmt in date_formats:
                 try:
                     return datetime.strptime(value, fmt)
@@ -436,6 +459,8 @@ class GenericSampleTestingApp:
 
         dialog = GenericRuleDialog(self.root, "Add Sampling Rule",
                                    self.column_names, self.column_types, self.data)
+        self.root.wait_window(dialog.dialog)  # Wait for dialog to close
+
         if dialog.result:
             self.rules.append(dialog.result)
             self.update_rules_display()
@@ -451,6 +476,8 @@ class GenericSampleTestingApp:
 
         dialog = GenericRuleDialog(self.root, "Edit Sampling Rule",
                                    self.column_names, self.column_types, self.data, rule)
+        self.root.wait_window(dialog.dialog)  # Wait for dialog to close
+
         if dialog.result:
             self.rules[index] = dialog.result
             self.update_rules_display()
@@ -466,6 +493,99 @@ class GenericSampleTestingApp:
             del self.rules[index]
             self.update_rules_display()
 
+    def add_year_rules(self):
+        """Quick add rules for each year in the data"""
+        if not self.column_names:
+            messagebox.showwarning("Warning", "Please load a CSV file first")
+            return
+
+        # Find date columns
+        date_columns = [col for col in self.column_names
+                        if self.column_types[col] == ColumnType.DATE]
+
+        if not date_columns:
+            messagebox.showwarning("Warning", "No date columns found in the data")
+            return
+
+        # Simple dialog to select date column and sample count
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Quick Add Rules by Year")
+        dialog.geometry("400x250")
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text="Select date column:").grid(row=0, column=0, padx=10, pady=10)
+        date_var = tk.StringVar(value=date_columns[0])
+        date_combo = ttk.Combobox(dialog, textvariable=date_var, values=date_columns, state='readonly')
+        date_combo.grid(row=0, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Samples per year:").grid(row=1, column=0, padx=10, pady=10)
+        samples_var = tk.IntVar(value=5)
+        samples_spin = ttk.Spinbox(dialog, from_=1, to=100, textvariable=samples_var)
+        samples_spin.grid(row=1, column=1, padx=10, pady=10)
+
+        ttk.Label(dialog, text="Rule name prefix:").grid(row=2, column=0, padx=10, pady=10)
+        prefix_var = tk.StringVar(value="Year")
+        prefix_entry = ttk.Entry(dialog, textvariable=prefix_var)
+        prefix_entry.grid(row=2, column=1, padx=10, pady=10)
+
+        result = {'ok': False}
+
+        def ok_clicked():
+            result['ok'] = True
+            result['column'] = date_var.get()
+            result['samples'] = samples_var.get()
+            result['prefix'] = prefix_var.get()
+            dialog.destroy()
+
+        def cancel_clicked():
+            dialog.destroy()
+
+        button_frame = ttk.Frame(dialog)
+        button_frame.grid(row=3, column=0, columnspan=2, pady=20)
+        ttk.Button(button_frame, text="OK", command=ok_clicked).grid(row=0, column=0, padx=5)
+        ttk.Button(button_frame, text="Cancel", command=cancel_clicked).grid(row=0, column=1, padx=5)
+
+        # Center dialog
+        dialog.update_idletasks()
+        x = (dialog.winfo_screenwidth() // 2) - (dialog.winfo_width() // 2)
+        y = (dialog.winfo_screenheight() // 2) - (dialog.winfo_height() // 2)
+        dialog.geometry(f"+{x}+{y}")
+
+        self.root.wait_window(dialog)
+
+        if result.get('ok'):
+            # Extract years from the selected date column
+            years = set()
+            for row in self.data:
+                if row.get(result['column']):
+                    years.add(row[result['column']].year)
+
+            years = sorted(years)
+
+            if not years:
+                messagebox.showwarning("Warning", "No valid years found in the selected column")
+                return
+
+            # Create a rule for each year
+            rules_added = 0
+            for year in years:
+                rule = GenericSamplingRule()
+                rule.name = f"{result['prefix']} {year}"
+                rule.sample_count = result['samples']
+
+                # Add date filter for this year
+                rule.filters[result['column']] = {
+                    'from': datetime(year, 1, 1),
+                    'to': datetime(year, 12, 31)
+                }
+
+                self.rules.append(rule)
+                rules_added += 1
+
+            self.update_rules_display()
+            messagebox.showinfo("Success", f"Added {rules_added} year-based rules")
+
     def update_rules_display(self):
         """Update the rules tree display"""
         for item in self.rules_tree.get_children():
@@ -475,7 +595,14 @@ class GenericSampleTestingApp:
             # Create a summary of filters
             filter_summary = []
             for column, config in rule.filters.items():
-                if self.column_types[column] == ColumnType.TEXT:
+                # Skip if column not in current data
+                if column not in self.column_types:
+                    filter_summary.append(f"{column}: [unknown column]")
+                    continue
+
+                col_type = self.column_types[column]
+
+                if col_type == ColumnType.TEXT:
                     if config['type'] == 'equals':
                         values = config.get('values', [])
                         if values:
@@ -484,7 +611,7 @@ class GenericSampleTestingApp:
                         pattern = config.get('pattern', '')
                         if pattern:
                             filter_summary.append(f"{column} contains '{pattern}'")
-                elif self.column_types[column] == ColumnType.NUMBER:
+                elif col_type == ColumnType.NUMBER:
                     parts = []
                     if config.get('min') is not None:
                         parts.append(f">= {config['min']}")
@@ -492,7 +619,7 @@ class GenericSampleTestingApp:
                         parts.append(f"<= {config['max']}")
                     if parts:
                         filter_summary.append(f"{column} {' and '.join(parts)}")
-                elif self.column_types[column] == ColumnType.DATE:
+                elif col_type == ColumnType.DATE:
                     parts = []
                     if config.get('from'):
                         parts.append(f"from {config['from'].strftime('%d-%m-%Y')}")
@@ -516,40 +643,48 @@ class GenericSampleTestingApp:
             messagebox.showwarning("Warning", "Please create at least one sampling rule")
             return
 
-        self.results = []
-        total_samples = 0
+        # Show preview of what will be generated
+        total_requested = sum(rule.sample_count for rule in self.rules)
+        if messagebox.askyesno("Confirm Sample Generation",
+                               f"This will generate samples for {len(self.rules)} rules:\n\n" +
+                               f"Total samples requested: {total_requested}\n" +
+                               f"(Actual number may be less if filtered data is smaller)\n\n" +
+                               "Continue?"):
 
-        for i, rule in enumerate(self.rules):
-            self.progress_label.config(text=f"Processing rule {i+1} of {len(self.rules)}...")
-            self.root.update()
+            self.results = []
+            total_samples = 0
 
-            # Apply filters
-            filtered_data = rule.apply_filter(self.data, self.column_types)
+            for i, rule in enumerate(self.rules):
+                self.progress_label.config(text=f"Processing rule {i+1} of {len(self.rules)}...")
+                self.root.update()
 
-            if not filtered_data:
-                messagebox.showwarning("Warning", f"No data matches rule '{rule.name}'")
-                continue
+                # Apply filters
+                filtered_data = rule.apply_filter(self.data, self.column_types)
 
-            # Generate samples
-            sample_size = min(rule.sample_count, len(filtered_data))
-            samples = random.sample(filtered_data, sample_size)
+                if not filtered_data:
+                    messagebox.showwarning("Warning", f"No data matches rule '{rule.name}'")
+                    continue
 
-            # Store results with rule name
-            for sample in samples:
-                result = sample.copy()
-                result['_rule_name'] = rule.name
-                self.results.append(result)
+                # Generate samples
+                sample_size = min(rule.sample_count, len(filtered_data))
+                samples = random.sample(filtered_data, sample_size)
 
-            total_samples += len(samples)
+                # Store results with rule name
+                for sample in samples:
+                    result = sample.copy()
+                    result['_rule_name'] = rule.name
+                    self.results.append(result)
 
-        self.progress_label.config(text="")
-        self.update_results_display()
+                total_samples += len(samples)
 
-        # Switch to results tab
-        self.notebook.select(self.results_tab)
+            self.progress_label.config(text="")
+            self.update_results_display()
 
-        messagebox.showinfo("Success",
-                            f"Generated {total_samples} total samples across {len(self.rules)} rules")
+            # Switch to results tab
+            self.notebook.select(self.results_tab)
+
+            messagebox.showinfo("Success",
+                                f"Generated {total_samples} total samples across {len(self.rules)} rules")
 
     def update_results_display(self):
         """Update the results display"""
@@ -698,6 +833,13 @@ class GenericSampleTestingApp:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to export: {str(e)}")
 
+    def clear_results(self):
+        """Clear all results"""
+        if self.results and messagebox.askyesno("Confirm", "Clear all results?"):
+            self.results = []
+            self.update_results_display()
+            self.results_summary_label.config(text="Results cleared")
+
 
 class GenericRuleDialog:
     """Dialog for creating/editing sampling rules with dynamic filters"""
@@ -707,6 +849,7 @@ class GenericRuleDialog:
         self.column_types = column_types
         self.data = data
         self.filter_widgets = {}
+        self.tooltip = None
 
         # Create dialog
         self.dialog = tk.Toplevel(parent)
@@ -728,6 +871,25 @@ class GenericRuleDialog:
         x = (self.dialog.winfo_screenwidth() // 2) - (self.dialog.winfo_width() // 2)
         y = (self.dialog.winfo_screenheight() // 2) - (self.dialog.winfo_height() // 2)
         self.dialog.geometry(f"+{x}+{y}")
+
+    def show_tooltip(self, event, text):
+        """Show tooltip with full text"""
+        x = event.widget.winfo_rootx() + 20
+        y = event.widget.winfo_rooty() + 20
+
+        self.tooltip = tk.Toplevel(self.dialog)
+        self.tooltip.wm_overrideredirect(True)
+        self.tooltip.wm_geometry(f"+{x}+{y}")
+
+        label = tk.Label(self.tooltip, text=text, background="lightyellow",
+                         relief="solid", borderwidth=1, wraplength=300)
+        label.pack()
+
+    def hide_tooltip(self):
+        """Hide tooltip"""
+        if self.tooltip:
+            self.tooltip.destroy()
+            self.tooltip = None
 
     def create_widgets(self):
         # Rule name
@@ -793,6 +955,7 @@ class GenericRuleDialog:
         # Column label
         frame = ttk.LabelFrame(parent, text=f"{column} [{col_type}]", padding="5")
         frame.grid(row=row, column=0, sticky=(tk.W, tk.E), padx=5, pady=2)
+        parent.columnconfigure(0, weight=1)  # Make sure the frame expands
 
         widgets = {}
 
@@ -806,21 +969,60 @@ class GenericRuleDialog:
 
             # Get unique values for dropdown
             unique_values = sorted(set(str(row.get(column, '')) for row in self.data
-                                       if row.get(column) is not None))[:100]  # Limit to 100
+                                       if row.get(column) is not None))[:50]  # Limit to 50
+            total_unique = len(set(str(row.get(column, '')) for row in self.data
+                                   if row.get(column) is not None))
 
-            # Equals: Multi-select listbox
-            equals_frame = ttk.Frame(frame)
-            equals_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E))
+            # Equals: Checkboxes in scrollable frame
+            values_text = f"Select values (showing {len(unique_values)} of {total_unique}):"
+            equals_frame = ttk.LabelFrame(frame, text=values_text, padding="5")
+            equals_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
 
-            listbox = tk.Listbox(equals_frame, selectmode=tk.MULTIPLE, height=4)
-            listbox_scroll = ttk.Scrollbar(equals_frame, orient=tk.VERTICAL, command=listbox.yview)
-            listbox.configure(yscrollcommand=listbox_scroll.set)
+            # Initialize check_vars first
+            check_vars = {}
 
-            for value in unique_values:
-                listbox.insert(tk.END, value)
+            # Select all/none buttons
+            button_frame = ttk.Frame(equals_frame)
+            button_frame.grid(row=0, column=0, sticky=(tk.W, tk.E))
 
-            listbox.grid(row=0, column=0, sticky=(tk.W, tk.E))
-            listbox_scroll.grid(row=0, column=1, sticky=(tk.N, tk.S))
+            def select_all():
+                for var in check_vars.values():
+                    var.set(True)
+
+            def select_none():
+                for var in check_vars.values():
+                    var.set(False)
+
+            ttk.Button(button_frame, text="All", command=select_all, width=6).grid(row=0, column=0, padx=2)
+            ttk.Button(button_frame, text="None", command=select_none, width=6).grid(row=0, column=1, padx=2)
+
+            # Create canvas for scrolling
+            canvas = tk.Canvas(equals_frame, height=100)
+            scrollbar = ttk.Scrollbar(equals_frame, orient="vertical", command=canvas.yview)
+            checkbox_frame = ttk.Frame(canvas)
+
+            checkbox_frame.bind(
+                "<Configure>",
+                lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+            )
+
+            canvas.create_window((0, 0), window=checkbox_frame, anchor="nw")
+            canvas.configure(yscrollcommand=scrollbar.set)
+
+            canvas.grid(row=1, column=0, sticky=(tk.W, tk.E))
+            scrollbar.grid(row=1, column=1, sticky=(tk.N, tk.S))
+
+            # Create checkboxes
+            for i, value in enumerate(unique_values):
+                var = tk.BooleanVar()
+                check_vars[value] = var
+                display_text = value if len(value) <= 30 else value[:27] + "..."
+                cb = ttk.Checkbutton(checkbox_frame, text=display_text, variable=var)
+                cb.grid(row=i, column=0, sticky=tk.W, padx=5)
+                # Add tooltip for full text if truncated
+                if len(value) > 30:
+                    cb.bind("<Enter>", lambda e, v=value: self.show_tooltip(e, v))
+                    cb.bind("<Leave>", lambda e: self.hide_tooltip())
 
             # Contains: Entry field
             ttk.Label(frame, text="Contains text:").grid(row=2, column=0, sticky=tk.W)
@@ -829,7 +1031,7 @@ class GenericRuleDialog:
 
             widgets = {
                 'type_var': filter_type_var,
-                'listbox': listbox,
+                'check_vars': check_vars,
                 'contains_entry': contains_entry,
                 'unique_values': unique_values
             }
@@ -872,10 +1074,10 @@ class GenericRuleDialog:
                 widgets['type_var'].set(filter_config.get('type', 'equals'))
 
                 if filter_config.get('type') == 'equals' and 'values' in filter_config:
-                    # Select items in listbox
-                    for i, value in enumerate(widgets['unique_values']):
-                        if value in filter_config['values']:
-                            widgets['listbox'].selection_set(i)
+                    # Check the appropriate checkboxes
+                    for value in filter_config['values']:
+                        if value in widgets['check_vars']:
+                            widgets['check_vars'][value].set(True)
                 elif filter_config.get('type') == 'contains' and 'pattern' in filter_config:
                     widgets['contains_entry'].insert(0, filter_config['pattern'])
 
@@ -911,6 +1113,7 @@ class GenericRuleDialog:
             return
 
         # Collect filters
+        filters_added = 0
         for column, widgets in self.filter_widgets.items():
             col_type = self.column_types[column]
             filter_config = {}
@@ -921,9 +1124,10 @@ class GenericRuleDialog:
                 filter_config['type'] = filter_type
 
                 if filter_type == 'equals':
-                    selected_indices = widgets['listbox'].curselection()
-                    if selected_indices:
-                        selected_values = [widgets['unique_values'][i] for i in selected_indices]
+                    # Get selected values from checkboxes
+                    selected_values = [value for value, var in widgets['check_vars'].items()
+                                       if var.get()]
+                    if selected_values:
                         filter_config['values'] = selected_values
                         has_filter = True
                 else:  # contains
@@ -977,6 +1181,13 @@ class GenericRuleDialog:
 
             if has_filter:
                 rule.filters[column] = filter_config
+                filters_added += 1
+
+        # Show confirmation
+        if filters_added == 0:
+            if not messagebox.askyesno("Confirm",
+                                       "No filters specified. This rule will select from all data. Continue?"):
+                return
 
         self.result = rule
         self.dialog.destroy()
