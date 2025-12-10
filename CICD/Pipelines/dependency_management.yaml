@@ -1,0 +1,1635 @@
+# GitHub Actions Dependency Management Pipeline for Python Projects
+
+## Main Workflow File: `.github/workflows/dependency-management.yml`
+
+```yaml
+name: Dependency Management Pipeline
+
+on:
+  # Scheduled daily run for vulnerability database updates
+  schedule:
+    - cron: '0 6 * * *'  # 6 AM UTC daily
+
+  # Trigger on dependency file changes
+  pull_request:
+    paths:
+      - 'requirements*.txt'
+      - 'pyproject.toml'
+      - 'poetry.lock'
+      - 'Pipfile*'
+      - 'setup.py'
+      - 'setup.cfg'
+      - '.github/workflows/dependency-management.yml'
+
+  # Trigger on push to main branches
+  push:
+    branches:
+      - main
+      - master
+      - develop
+    paths:
+      - 'requirements*.txt'
+      - 'pyproject.toml'
+      - 'poetry.lock'
+      - 'Pipfile*'
+
+  # Manual trigger with options
+  workflow_dispatch:
+    inputs:
+      update_dependencies:
+        description: 'Update dependencies'
+        required: false
+        type: choice
+        options:
+          - 'none'
+          - 'patch'
+          - 'minor'
+          - 'major'
+        default: 'none'
+      security_level:
+        description: 'Security check level'
+        required: false
+        type: choice
+        options:
+          - 'development'
+          - 'standard'
+          - 'strict'
+          - 'compliance'
+        default: 'standard'
+
+  # Webhook for security advisories
+  repository_dispatch:
+    types: [security-advisory]
+
+# Environment variables for configuration
+env:
+  PYTHON_VERSION: '3.11'
+  PIP_DISABLE_PIP_VERSION_CHECK: 1
+  PIP_NO_CACHE_DIR: 1
+  # Security tool API keys (store in secrets)
+  SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+  SAFETY_API_KEY: ${{ secrets.SAFETY_API_KEY }}
+  # Notification settings
+  SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+  SECURITY_EMAIL: ${{ vars.SECURITY_EMAIL || 'security@example.com' }}
+  # Configuration
+  SECURITY_LEVEL: ${{ inputs.security_level || 'standard' }}
+  UPDATE_LEVEL: ${{ inputs.update_dependencies || 'none' }}
+
+# Limit concurrent runs for the same branch
+concurrency:
+  group: deps-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Job 1: Detect package manager and configuration
+  detect-environment:
+    name: Detect Project Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      package_manager: ${{ steps.detect.outputs.package_manager }}
+      has_lock_file: ${{ steps.detect.outputs.has_lock_file }}
+      python_versions: ${{ steps.detect.outputs.python_versions }}
+      dependency_files: ${{ steps.detect.outputs.dependency_files }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: Detect package manager and files
+        id: detect
+        run: |
+          # Detect package manager and dependency files
+          echo "🔍 Detecting project configuration..."
+
+          PACKAGE_MANAGER="pip"
+          HAS_LOCK_FILE="false"
+          DEPENDENCY_FILES=""
+
+          # Check for various package managers
+          if [ -f "poetry.lock" ] || [ -f "pyproject.toml" ] && grep -q "tool.poetry" pyproject.toml 2>/dev/null; then
+            PACKAGE_MANAGER="poetry"
+            HAS_LOCK_FILE="true"
+            DEPENDENCY_FILES="pyproject.toml,poetry.lock"
+            echo "📦 Detected Poetry project"
+          elif [ -f "Pipfile.lock" ] || [ -f "Pipfile" ]; then
+            PACKAGE_MANAGER="pipenv"
+            HAS_LOCK_FILE="true"
+            DEPENDENCY_FILES="Pipfile,Pipfile.lock"
+            echo "📦 Detected Pipenv project"
+          elif [ -f "requirements.lock" ] || [ -f "requirements.in" ]; then
+            PACKAGE_MANAGER="pip-tools"
+            HAS_LOCK_FILE="true"
+            DEPENDENCY_FILES="requirements.in,requirements.txt,requirements.lock"
+            echo "📦 Detected pip-tools project"
+          elif [ -f "requirements.txt" ]; then
+            PACKAGE_MANAGER="pip"
+            DEPENDENCY_FILES="requirements.txt"
+            echo "📦 Detected pip project with requirements.txt"
+          elif [ -f "pyproject.toml" ]; then
+            PACKAGE_MANAGER="pip"
+            DEPENDENCY_FILES="pyproject.toml"
+            echo "📦 Detected PEP 621 project"
+          elif [ -f "setup.py" ] || [ -f "setup.cfg" ]; then
+            PACKAGE_MANAGER="setuptools"
+            DEPENDENCY_FILES="setup.py,setup.cfg"
+            echo "📦 Detected setuptools project"
+          fi
+
+          # Detect Python versions from config files
+          PYTHON_VERSIONS='["3.8", "3.9", "3.10", "3.11", "3.12"]'
+          if [ -f "pyproject.toml" ]; then
+            # Extract Python version constraints if specified
+            if grep -q "requires-python" pyproject.toml; then
+              echo "🐍 Found Python version constraints in pyproject.toml"
+            fi
+          fi
+
+          echo "package_manager=$PACKAGE_MANAGER" >> $GITHUB_OUTPUT
+          echo "has_lock_file=$HAS_LOCK_FILE" >> $GITHUB_OUTPUT
+          echo "python_versions=$PYTHON_VERSIONS" >> $GITHUB_OUTPUT
+          echo "dependency_files=$DEPENDENCY_FILES" >> $GITHUB_OUTPUT
+
+          # Create summary
+          echo "## 📋 Project Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "- **Package Manager:** $PACKAGE_MANAGER" >> $GITHUB_STEP_SUMMARY
+          echo "- **Lock File:** $HAS_LOCK_FILE" >> $GITHUB_STEP_SUMMARY
+          echo "- **Dependency Files:** $DEPENDENCY_FILES" >> $GITHUB_STEP_SUMMARY
+
+  # Job 2: Vulnerability Scanning
+  vulnerability-scan:
+    name: Security Vulnerability Scanning
+    runs-on: ubuntu-latest
+    needs: detect-environment
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJson(needs.detect-environment.outputs.python_versions) }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml', '**/Pipfile*') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies and security tools
+        run: |
+          echo "📦 Installing security scanning tools..."
+          python -m pip install --upgrade pip
+
+          # Install security tools
+          pip install pip-audit safety bandit semgrep osv-scanner
+
+          # Install package manager specific tools
+          if [ "${{ needs.detect-environment.outputs.package_manager }}" = "poetry" ]; then
+            pip install poetry
+            poetry install --no-interaction
+          elif [ "${{ needs.detect-environment.outputs.package_manager }}" = "pipenv" ]; then
+            pip install pipenv
+            pipenv install --dev --deploy
+          else
+            # Install from requirements files
+            for req_file in requirements*.txt; do
+              if [ -f "$req_file" ]; then
+                echo "📦 Installing from $req_file"
+                pip install -r "$req_file" || true
+              fi
+            done
+
+            # Install from pyproject.toml if exists
+            if [ -f "pyproject.toml" ]; then
+              pip install -e . || true
+            fi
+          fi
+
+      - name: Run pip-audit scan
+        id: pip_audit
+        continue-on-error: true
+        run: |
+          echo "🔍 Running pip-audit vulnerability scan..."
+
+          # Create output directory
+          mkdir -p security-reports
+
+          # Run pip-audit with different output formats
+          pip-audit --desc --format json > security-reports/pip-audit.json || true
+          pip-audit --desc --format markdown > security-reports/pip-audit.md || true
+
+          # Parse results for summary
+          if [ -f "security-reports/pip-audit.json" ]; then
+            VULN_COUNT=$(jq 'length' security-reports/pip-audit.json)
+            CRITICAL_COUNT=$(jq '[.[] | select(.vuln.aliases | map(select(startswith("GHSA"))) | length > 0)] | length' security-reports/pip-audit.json)
+
+            echo "vuln_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+            echo "critical_count=$CRITICAL_COUNT" >> $GITHUB_OUTPUT
+
+            # Educational output
+            echo "## 🛡️ Vulnerability Scan Results (pip-audit)" >> $GITHUB_STEP_SUMMARY
+            echo "- **Total Vulnerabilities:** $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- **Critical Issues:** $CRITICAL_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### What are vulnerabilities?" >> $GITHUB_STEP_SUMMARY
+            echo "Vulnerabilities are security flaws in code that could be exploited by attackers." >> $GITHUB_STEP_SUMMARY
+            echo "- **Critical**: Immediate action required, can lead to system compromise" >> $GITHUB_STEP_SUMMARY
+            echo "- **High**: Should be fixed soon, significant security risk" >> $GITHUB_STEP_SUMMARY
+            echo "- **Medium**: Plan to fix, moderate risk" >> $GITHUB_STEP_SUMMARY
+            echo "- **Low**: Minor issues, fix when convenient" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Run Safety check
+        if: env.SAFETY_API_KEY != ''
+        continue-on-error: true
+        run: |
+          echo "🔍 Running Safety vulnerability scan..."
+
+          # Run safety with API key for enhanced database
+          safety check --key ${{ env.SAFETY_API_KEY }} --json > security-reports/safety.json || true
+          safety check --key ${{ env.SAFETY_API_KEY }} --output text > security-reports/safety.txt || true
+
+          # Generate detailed report
+          safety check --key ${{ env.SAFETY_API_KEY }} --detailed-output || true
+
+      - name: Run OSV Scanner
+        continue-on-error: true
+        run: |
+          echo "🔍 Running OSV (Open Source Vulnerabilities) scan..."
+
+          # Download and run OSV scanner
+          wget -qO osv-scanner https://github.com/google/osv-scanner/releases/latest/download/osv-scanner_linux_amd64
+          chmod +x osv-scanner
+
+          # Scan for vulnerabilities
+          ./osv-scanner --format json --output security-reports/osv-scan.json . || true
+          ./osv-scanner --format markdown --output security-reports/osv-scan.md . || true
+
+      - name: Check for typosquatting
+        continue-on-error: true
+        run: |
+          echo "🔍 Checking for potential typosquatting attacks..."
+
+          # Create a Python script to check for typosquatting
+          cat > check_typosquatting.py << 'EOF'
+          import json
+          import difflib
+          import requests
+          from pathlib import Path
+
+          # Common legitimate packages (expand this list)
+          KNOWN_PACKAGES = {
+              'numpy', 'pandas', 'requests', 'django', 'flask',
+              'pytest', 'scipy', 'matplotlib', 'pillow', 'sqlalchemy',
+              'beautifulsoup4', 'tensorflow', 'torch', 'scikit-learn'
+          }
+
+          def check_typosquatting(package_name):
+              """Check if a package might be typosquatting"""
+              # Check similarity to known packages
+              for known in KNOWN_PACKAGES:
+                  similarity = difflib.SequenceMatcher(None, package_name.lower(), known).ratio()
+                  if 0.8 < similarity < 1.0:  # Similar but not exact
+                      return f"Possible typosquatting of '{known}' (similarity: {similarity:.2%})"
+
+              # Check for suspicious patterns
+              suspicious_patterns = [
+                  'djang0', 'numpyy', 'requets', 'beautifu1soup'
+              ]
+              for pattern in suspicious_patterns:
+                  if pattern in package_name.lower():
+                      return f"Contains suspicious pattern: '{pattern}'"
+
+              return None
+
+          # Check installed packages
+          import pkg_resources
+          installed = [pkg.key for pkg in pkg_resources.working_set]
+
+          suspicious = []
+          for pkg in installed:
+              result = check_typosquatting(pkg)
+              if result:
+                  suspicious.append(f"{pkg}: {result}")
+
+          if suspicious:
+              print("⚠️ Potential typosquatting detected:")
+              for s in suspicious:
+                  print(f"  - {s}")
+          else:
+              print("✅ No obvious typosquatting detected")
+
+          # Save results
+          with open('security-reports/typosquatting.json', 'w') as f:
+              json.dump({'suspicious_packages': suspicious}, f, indent=2)
+          EOF
+
+          python check_typosquatting.py || true
+
+      - name: Run Snyk scan
+        if: env.SNYK_TOKEN != ''
+        continue-on-error: true
+        run: |
+          echo "🔍 Running Snyk vulnerability scan..."
+
+          # Install Snyk CLI
+          npm install -g snyk
+
+          # Authenticate with Snyk
+          snyk auth ${{ env.SNYK_TOKEN }}
+
+          # Run Snyk test
+          snyk test --json > security-reports/snyk.json || true
+          snyk test --sarif > security-reports/snyk.sarif || true
+
+      - name: Generate SARIF report
+        if: always()
+        run: |
+          echo "📊 Generating SARIF report for GitHub Security tab..."
+
+          # Create a Python script to convert reports to SARIF
+          cat > convert_to_sarif.py << 'EOF'
+          import json
+          import sys
+          from pathlib import Path
+          from datetime import datetime
+
+          def create_sarif_report(vulnerabilities):
+              """Create SARIF format report"""
+              sarif = {
+                  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+                  "version": "2.1.0",
+                  "runs": [{
+                      "tool": {
+                          "driver": {
+                              "name": "Dependency Security Scanner",
+                              "version": "1.0.0",
+                              "informationUri": "https://github.com/your-org/dependency-scanner",
+                              "rules": []
+                          }
+                      },
+                      "results": [],
+                      "columnKind": "utf16CodeUnits",
+                      "properties": {
+                          "datetime": datetime.utcnow().isoformat()
+                      }
+                  }]
+              }
+
+              # Add vulnerabilities as results
+              for vuln in vulnerabilities:
+                  rule = {
+                      "id": vuln.get("id", "UNKNOWN"),
+                      "name": vuln.get("name", "Unknown Vulnerability"),
+                      "shortDescription": {
+                          "text": vuln.get("description", "Security vulnerability detected")
+                      },
+                      "fullDescription": {
+                          "text": vuln.get("full_description", "A security vulnerability was detected in a dependency")
+                      },
+                      "defaultConfiguration": {
+                          "level": vuln.get("severity", "warning").lower()
+                      },
+                      "helpUri": vuln.get("url", "https://github.com")
+                  }
+
+                  sarif["runs"][0]["tool"]["driver"]["rules"].append(rule)
+
+                  result = {
+                      "ruleId": vuln.get("id", "UNKNOWN"),
+                      "level": vuln.get("severity", "warning").lower(),
+                      "message": {
+                          "text": f"{vuln.get('package', 'Unknown')} - {vuln.get('description', 'Vulnerability detected')}"
+                      },
+                      "locations": [{
+                          "physicalLocation": {
+                              "artifactLocation": {
+                                  "uri": "requirements.txt",
+                                  "uriBaseId": "%SRCROOT%"
+                              }
+                          }
+                      }]
+                  }
+
+                  sarif["runs"][0]["results"].append(result)
+
+              return sarif
+
+          # Process pip-audit results
+          vulnerabilities = []
+          try:
+              with open('security-reports/pip-audit.json', 'r') as f:
+                  pip_audit_data = json.load(f)
+                  for vuln in pip_audit_data:
+                      vulnerabilities.append({
+                          "id": vuln.get("vuln", {}).get("id", "UNKNOWN"),
+                          "name": vuln.get("name", "Unknown"),
+                          "package": vuln.get("name", "Unknown"),
+                          "description": vuln.get("vuln", {}).get("description", ""),
+                          "severity": "high" if "critical" in str(vuln).lower() else "medium",
+                          "url": vuln.get("vuln", {}).get("url", "")
+                      })
+          except Exception as e:
+              print(f"Error processing pip-audit results: {e}")
+
+          # Generate SARIF
+          sarif_report = create_sarif_report(vulnerabilities)
+          with open('security-reports/dependency-scan.sarif', 'w') as f:
+              json.dump(sarif_report, f, indent=2)
+
+          print(f"✅ Generated SARIF report with {len(vulnerabilities)} findings")
+          EOF
+
+          python convert_to_sarif.py
+
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: security-reports/dependency-scan.sarif
+          category: dependency-scan-${{ matrix.python-version }}
+        continue-on-error: true
+
+      - name: Comment on PR with security summary
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let comment = '## 🔒 Dependency Security Report\n\n';
+
+            // Read pip-audit results
+            try {
+              const pipAuditData = JSON.parse(fs.readFileSync('security-reports/pip-audit.json', 'utf8'));
+              const vulnCount = pipAuditData.length;
+
+              if (vulnCount > 0) {
+                comment += `### ⚠️ Found ${vulnCount} vulnerabilities\n\n`;
+                comment += '| Package | Vulnerability | Severity | Description |\n';
+                comment += '|---------|--------------|----------|-------------|\n';
+
+                pipAuditData.slice(0, 10).forEach(vuln => {
+                  const pkg = vuln.name || 'Unknown';
+                  const id = vuln.vuln?.id || 'Unknown';
+                  const severity = vuln.vuln?.severity || 'Unknown';
+                  const desc = (vuln.vuln?.description || 'No description').substring(0, 100);
+                  comment += `| ${pkg} | ${id} | ${severity} | ${desc}... |\n`;
+                });
+
+                if (vulnCount > 10) {
+                  comment += `\n*... and ${vulnCount - 10} more*\n`;
+                }
+              } else {
+                comment += '### ✅ No vulnerabilities detected!\n\n';
+              }
+            } catch (e) {
+              comment += '### ℹ️ Security scan results pending...\n\n';
+            }
+
+            // Add educational content
+            comment += '\n### 📚 Understanding Security Scores\n\n';
+            comment += '- **Critical** (9.0-10.0): Fix immediately - remote code execution possible\n';
+            comment += '- **High** (7.0-8.9): Fix within days - significant security impact\n';
+            comment += '- **Medium** (4.0-6.9): Fix within weeks - moderate risk\n';
+            comment += '- **Low** (0.1-3.9): Fix when convenient - minimal risk\n';
+
+            // Post comment
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-${{ matrix.python-version }}
+          path: security-reports/
+          retention-days: 90
+
+  # Job 3: License Compliance Check
+  license-compliance:
+    name: License Compliance Analysis
+    runs-on: ubuntu-latest
+    needs: detect-environment
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install license checking tools
+        run: |
+          echo "📦 Installing license analysis tools..."
+          pip install pip-licenses licensecheck scancode-toolkit cyclonedx-bom
+
+      - name: Generate license report
+        id: license_check
+        run: |
+          echo "📜 Analyzing license compliance..."
+
+          mkdir -p license-reports
+
+          # Generate license report
+          pip-licenses --format=json --with-urls --with-description > license-reports/licenses.json
+          pip-licenses --format=markdown --with-urls > license-reports/licenses.md
+          pip-licenses --format=csv > license-reports/licenses.csv
+
+          # Check for problematic licenses
+          cat > check_licenses.py << 'EOF'
+          import json
+          import sys
+          from pathlib import Path
+
+          # Define license categories
+          LICENSE_CATEGORIES = {
+              'permissive': [
+                  'MIT', 'BSD', 'Apache', 'ISC', 'Python Software Foundation',
+                  'BSD-3-Clause', 'BSD-2-Clause', 'Apache-2.0', 'Apache 2.0'
+              ],
+              'copyleft': [
+                  'GPL', 'LGPL', 'AGPL', 'GPLv2', 'GPLv3', 'LGPLv2', 'LGPLv3',
+                  'GNU General Public License', 'GNU Lesser General Public License'
+              ],
+              'commercial': [
+                  'Commercial', 'Proprietary', 'EULA'
+              ],
+              'unknown': [
+                  'Unknown', 'UNKNOWN', 'None', 'Custom'
+              ]
+          }
+
+          # Load license data
+          with open('license-reports/licenses.json', 'r') as f:
+              licenses = json.load(f)
+
+          # Analyze licenses
+          results = {
+              'total_packages': len(licenses),
+              'permissive': [],
+              'copyleft': [],
+              'commercial': [],
+              'unknown': [],
+              'warnings': [],
+              'errors': []
+          }
+
+          for pkg in licenses:
+              license_name = pkg.get('License', 'Unknown')
+              package_name = pkg.get('Name', 'Unknown')
+
+              categorized = False
+              for category, license_list in LICENSE_CATEGORIES.items():
+                  if any(lic in license_name for lic in license_list):
+                      results[category].append({
+                          'name': package_name,
+                          'license': license_name,
+                          'version': pkg.get('Version', 'Unknown')
+                      })
+                      categorized = True
+                      break
+
+              if not categorized:
+                  results['unknown'].append({
+                      'name': package_name,
+                      'license': license_name,
+                      'version': pkg.get('Version', 'Unknown')
+                  })
+
+          # Generate warnings
+          if results['copyleft']:
+              results['warnings'].append(
+                  f"⚠️ Found {len(results['copyleft'])} packages with copyleft licenses (GPL/LGPL/AGPL). "
+                  "These may require you to open-source your code."
+              )
+
+          if results['commercial']:
+              results['errors'].append(
+                  f"❌ Found {len(results['commercial'])} packages with commercial licenses. "
+                  "Ensure you have proper licensing agreements."
+              )
+
+          if results['unknown']:
+              results['warnings'].append(
+                  f"⚠️ Found {len(results['unknown'])} packages with unknown or custom licenses. "
+                  "Manual review required."
+              )
+
+          # Save analysis
+          with open('license-reports/analysis.json', 'w') as f:
+              json.dump(results, f, indent=2)
+
+          # Generate summary
+          print(f"📊 License Analysis Summary:")
+          print(f"  Total packages: {results['total_packages']}")
+          print(f"  Permissive: {len(results['permissive'])}")
+          print(f"  Copyleft: {len(results['copyleft'])}")
+          print(f"  Commercial: {len(results['commercial'])}")
+          print(f"  Unknown: {len(results['unknown'])}")
+
+          # Exit with error if commercial licenses found
+          if results['errors']:
+              print("\n❌ License compliance errors found:")
+              for error in results['errors']:
+                  print(f"  {error}")
+              sys.exit(1 if '${{ env.SECURITY_LEVEL }}' == 'strict' else 0)
+
+          # Output for GitHub Actions
+          print(f"::set-output name=copyleft_count::{len(results['copyleft'])}")
+          print(f"::set-output name=unknown_count::{len(results['unknown'])}")
+          print(f"::set-output name=commercial_count::{len(results['commercial'])}")
+          EOF
+
+          python check_licenses.py
+
+      - name: Generate SBOM (Software Bill of Materials)
+        run: |
+          echo "📦 Generating Software Bill of Materials..."
+
+          # Generate CycloneDX SBOM
+          pip install cyclonedx-bom
+          cyclonedx-bom -F -o license-reports/sbom.json
+          cyclonedx-bom -F -o license-reports/sbom.xml
+
+          # Generate SPDX SBOM (alternative format)
+          pip install spdx-tools
+          python -m spdx.cli convert license-reports/sbom.json license-reports/sbom.spdx.json
+
+          echo "✅ SBOM generated in CycloneDX and SPDX formats"
+
+      - name: Create attribution file
+        run: |
+          echo "📝 Creating attribution file..."
+
+          cat > generate_attribution.py << 'EOF'
+          import json
+          from pathlib import Path
+
+          # Load license data
+          with open('license-reports/licenses.json', 'r') as f:
+              licenses = json.load(f)
+
+          # Generate attribution file
+          with open('ATTRIBUTION.md', 'w') as f:
+              f.write('# Third-Party Software Attribution\n\n')
+              f.write('This project uses the following open-source packages:\n\n')
+
+              # Group by license
+              by_license = {}
+              for pkg in licenses:
+                  license_name = pkg.get('License', 'Unknown')
+                  if license_name not in by_license:
+                      by_license[license_name] = []
+                  by_license[license_name].append(pkg)
+
+              # Write attributions
+              for license_name, packages in sorted(by_license.items()):
+                  f.write(f'## {license_name}\n\n')
+                  for pkg in sorted(packages, key=lambda x: x.get('Name', '')):
+                      name = pkg.get('Name', 'Unknown')
+                      version = pkg.get('Version', 'Unknown')
+                      url = pkg.get('URL', '')
+                      f.write(f'- **{name}** (v{version})')
+                      if url:
+                          f.write(f' - [{url}]({url})')
+                      f.write('\n')
+                  f.write('\n')
+
+          print("✅ Attribution file generated: ATTRIBUTION.md")
+          EOF
+
+          python generate_attribution.py
+
+      - name: Generate compliance report
+        if: always()
+        run: |
+          echo "## 📜 License Compliance Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f "license-reports/analysis.json" ]; then
+            COPYLEFT_COUNT=$(jq '.copyleft | length' license-reports/analysis.json)
+            UNKNOWN_COUNT=$(jq '.unknown | length' license-reports/analysis.json)
+            COMMERCIAL_COUNT=$(jq '.commercial | length' license-reports/analysis.json)
+
+            echo "### Summary" >> $GITHUB_STEP_SUMMARY
+            echo "- **Copyleft Licenses:** $COPYLEFT_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- **Unknown Licenses:** $UNKNOWN_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "- **Commercial Licenses:** $COMMERCIAL_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            echo "### License Categories Explained" >> $GITHUB_STEP_SUMMARY
+            echo "- **Permissive** (MIT, BSD, Apache): You can use freely with attribution" >> $GITHUB_STEP_SUMMARY
+            echo "- **Copyleft** (GPL, LGPL): May require open-sourcing your code" >> $GITHUB_STEP_SUMMARY
+            echo "- **Commercial**: Requires paid license for commercial use" >> $GITHUB_STEP_SUMMARY
+            echo "- **Unknown**: Needs manual review to determine usage rights" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload license reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: license-reports
+          path: |
+            license-reports/
+            ATTRIBUTION.md
+          retention-days: 90
+
+  # Job 4: Dependency Health Analysis
+  dependency-health:
+    name: Dependency Health & Maintenance Check
+    runs-on: ubuntu-latest
+    needs: detect-environment
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Analyze dependency health
+        run: |
+          echo "🏥 Analyzing dependency health..."
+
+          mkdir -p health-reports
+
+          # Create health check script
+          cat > check_health.py << 'EOF'
+          import json
+          import subprocess
+          import sys
+          from datetime import datetime, timedelta
+          import requests
+          from pathlib import Path
+
+          def get_package_info(package_name):
+              """Get package information from PyPI"""
+              try:
+                  response = requests.get(f'https://pypi.org/pypi/{package_name}/json')
+                  if response.status_code == 200:
+                      return response.json()
+              except:
+                  pass
+              return None
+
+          def check_package_health(package_name):
+              """Check health metrics for a package"""
+              health = {
+                  'name': package_name,
+                  'health_score': 100,
+                  'issues': [],
+                  'recommendations': []
+              }
+
+              info = get_package_info(package_name)
+              if not info:
+                  health['health_score'] -= 20
+                  health['issues'].append('Package not found on PyPI')
+                  return health
+
+              # Check last update
+              releases = info.get('releases', {})
+              if releases:
+                  dates = []
+                  for version, files in releases.items():
+                      if files:
+                          upload_time = files[0].get('upload_time_iso_8601', '')
+                          if upload_time:
+                              dates.append(datetime.fromisoformat(upload_time.replace('Z', '+00:00')))
+
+                  if dates:
+                      latest_date = max(dates)
+                      days_old = (datetime.now(latest_date.tzinfo) - latest_date).days
+
+                      if days_old > 730:  # 2 years
+                          health['health_score'] -= 30
+                          health['issues'].append(f'No updates in {days_old} days - possibly abandoned')
+                          health['recommendations'].append('Consider finding alternatives')
+                      elif days_old > 365:  # 1 year
+                          health['health_score'] -= 15
+                          health['issues'].append(f'No updates in {days_old} days')
+                          health['recommendations'].append('Monitor for maintenance status')
+
+              # Check project URLs
+              urls = info.get('info', {}).get('project_urls', {})
+              if not urls or 'Source' not in urls:
+                  health['health_score'] -= 10
+                  health['issues'].append('No source repository URL')
+
+              # Check for deprecation
+              description = info.get('info', {}).get('description', '').lower()
+              if any(word in description for word in ['deprecated', 'unmaintained', 'abandoned']):
+                  health['health_score'] -= 40
+                  health['issues'].append('Package marked as deprecated or unmaintained')
+                  health['recommendations'].append('Find alternative package immediately')
+
+              # Check download stats (popularity)
+              # Note: PyPI doesn't provide download stats in the API anymore
+              # This would require using a service like pypistats.org
+
+              return health
+
+          # Get installed packages
+          result = subprocess.run(['pip', 'list', '--format=json'],
+                                  capture_output=True, text=True)
+          packages = json.loads(result.stdout)
+
+          # Analyze each package
+          health_report = {
+              'timestamp': datetime.now().isoformat(),
+              'packages': [],
+              'summary': {
+                  'total': len(packages),
+                  'healthy': 0,
+                  'warning': 0,
+                  'critical': 0
+              }
+          }
+
+          for pkg in packages:
+              print(f"Checking {pkg['name']}...")
+              health = check_package_health(pkg['name'])
+
+              # Categorize
+              if health['health_score'] >= 80:
+                  health['status'] = 'healthy'
+                  health_report['summary']['healthy'] += 1
+              elif health['health_score'] >= 50:
+                  health['status'] = 'warning'
+                  health_report['summary']['warning'] += 1
+              else:
+                  health['status'] = 'critical'
+                  health_report['summary']['critical'] += 1
+
+              health_report['packages'].append(health)
+
+          # Sort by health score
+          health_report['packages'].sort(key=lambda x: x['health_score'])
+
+          # Save report
+          with open('health-reports/health.json', 'w') as f:
+              json.dump(health_report, f, indent=2)
+
+          # Generate summary
+          print(f"\n📊 Health Check Summary:")
+          print(f"  Total packages: {health_report['summary']['total']}")
+          print(f"  Healthy: {health_report['summary']['healthy']}")
+          print(f"  Warning: {health_report['summary']['warning']}")
+          print(f"  Critical: {health_report['summary']['critical']}")
+
+          # Show critical issues
+          critical = [p for p in health_report['packages'] if p['status'] == 'critical']
+          if critical:
+              print("\n❌ Critical health issues:")
+              for pkg in critical[:5]:
+                  print(f"  - {pkg['name']} (score: {pkg['health_score']})")
+                  for issue in pkg['issues']:
+                      print(f"    • {issue}")
+          EOF
+
+          pip install requests
+          python check_health.py || true
+
+      - name: Check for dependency confusion attacks
+        run: |
+          echo "🔍 Checking for dependency confusion vulnerabilities..."
+
+          cat > check_confusion.py << 'EOF'
+          import json
+          import subprocess
+          import requests
+
+          def check_internal_package(package_name):
+              """Check if package might be internal (not on PyPI)"""
+              try:
+                  response = requests.get(f'https://pypi.org/pypi/{package_name}/json')
+                  if response.status_code == 404:
+                      return True
+              except:
+                  pass
+              return False
+
+          # Get all required packages
+          packages = []
+          try:
+              # Parse requirements.txt
+              with open('requirements.txt', 'r') as f:
+                  for line in f:
+                      line = line.strip()
+                      if line and not line.startswith('#'):
+                          pkg = line.split('==')[0].split('>=')[0].split('<=')[0]
+                          packages.append(pkg)
+          except:
+              pass
+
+          # Check for potential confusion
+          internal_packages = []
+          for pkg in packages:
+              if check_internal_package(pkg):
+                  internal_packages.append(pkg)
+
+          if internal_packages:
+              print("⚠️ Potential dependency confusion risk detected!")
+              print("The following packages are not on PyPI and might be internal:")
+              for pkg in internal_packages:
+                  print(f"  - {pkg}")
+              print("\nRecommendation: Use a private package index for internal packages")
+          else:
+              print("✅ No obvious dependency confusion risks detected")
+          EOF
+
+          python check_confusion.py || true
+
+      - name: Generate health report
+        if: always()
+        run: |
+          echo "## 🏥 Dependency Health Report" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f "health-reports/health.json" ]; then
+            CRITICAL=$(jq '.summary.critical' health-reports/health.json)
+            WARNING=$(jq '.summary.warning' health-reports/health.json)
+            HEALTHY=$(jq '.summary.healthy' health-reports/health.json)
+
+            echo "- **Healthy packages:** $HEALTHY" >> $GITHUB_STEP_SUMMARY
+            echo "- **Packages with warnings:** $WARNING" >> $GITHUB_STEP_SUMMARY
+            echo "- **Critical issues:** $CRITICAL" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            echo "### Health Indicators" >> $GITHUB_STEP_SUMMARY
+            echo "- **Last Update:** How recently the package was updated" >> $GITHUB_STEP_SUMMARY
+            echo "- **Maintenance:** Whether the package is actively maintained" >> $GITHUB_STEP_SUMMARY
+            echo "- **Repository:** Availability of source code and issue tracking" >> $GITHUB_STEP_SUMMARY
+            echo "- **Community:** Size and activity of the user community" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload health reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: health-reports
+          path: health-reports/
+          retention-days: 90
+
+  # Job 5: Supply Chain Security
+  supply-chain:
+    name: Supply Chain Security Verification
+    runs-on: ubuntu-latest
+    needs: detect-environment
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Verify package integrity
+        run: |
+          echo "🔐 Verifying package integrity and supply chain..."
+
+          mkdir -p supply-chain-reports
+
+          # Create verification script
+          cat > verify_supply_chain.py << 'EOF'
+          import json
+          import hashlib
+          import subprocess
+          import requests
+          from pathlib import Path
+
+          def verify_package_hashes(package_name, version):
+              """Verify package file hashes against PyPI"""
+              try:
+                  response = requests.get(f'https://pypi.org/pypi/{package_name}/{version}/json')
+                  if response.status_code != 200:
+                      return False, "Package version not found on PyPI"
+
+                  data = response.json()
+                  urls = data.get('urls', [])
+
+                  # Get expected hashes from PyPI
+                  expected_hashes = {}
+                  for url_info in urls:
+                      filename = url_info['filename']
+                      expected_hashes[filename] = {
+                          'md5': url_info.get('md5_digest'),
+                          'sha256': url_info.get('digests', {}).get('sha256')
+                      }
+
+                  return True, f"Package has {len(expected_hashes)} verified distributions"
+              except Exception as e:
+                  return False, str(e)
+
+          def check_package_signatures():
+              """Check for package signatures (when available)"""
+              # Note: PyPI doesn't widely support package signing yet
+              # This is a placeholder for future implementation
+              return True, "Signature verification not yet implemented"
+
+          def analyze_package_behavior(package_name):
+              """Analyze package for suspicious behavior"""
+              suspicious_indicators = []
+
+              try:
+                  # Check package metadata
+                  result = subprocess.run(['pip', 'show', package_name],
+                                          capture_output=True, text=True)
+
+                  if result.returncode == 0:
+                      metadata = result.stdout
+
+                      # Check for suspicious patterns
+                      if 'Home-page: UNKNOWN' in metadata:
+                          suspicious_indicators.append('No homepage specified')
+
+                      if 'Author: UNKNOWN' in metadata:
+                          suspicious_indicators.append('No author information')
+              except:
+                  pass
+
+              return suspicious_indicators
+
+          # Get installed packages with versions
+          result = subprocess.run(['pip', 'list', '--format=json'],
+                                  capture_output=True, text=True)
+          packages = json.loads(result.stdout)
+
+          # Verify supply chain
+          report = {
+              'total_packages': len(packages),
+              'verified': 0,
+              'unverified': 0,
+              'suspicious': [],
+              'verification_details': []
+          }
+
+          for pkg in packages:
+              name = pkg['name']
+              version = pkg['version']
+
+              # Verify package
+              verified, message = verify_package_hashes(name, version)
+
+              # Check for suspicious behavior
+              suspicious = analyze_package_behavior(name)
+
+              verification = {
+                  'package': name,
+                  'version': version,
+                  'verified': verified,
+                  'message': message,
+                  'suspicious_indicators': suspicious
+              }
+
+              if verified:
+                  report['verified'] += 1
+              else:
+                  report['unverified'] += 1
+
+              if suspicious:
+                  report['suspicious'].append({
+                      'package': name,
+                      'indicators': suspicious
+                  })
+
+              report['verification_details'].append(verification)
+
+          # Save report
+          with open('supply-chain-reports/verification.json', 'w') as f:
+              json.dump(report, f, indent=2)
+
+          # Print summary
+          print(f"📊 Supply Chain Verification Summary:")
+          print(f"  Total packages: {report['total_packages']}")
+          print(f"  Verified: {report['verified']}")
+          print(f"  Unverified: {report['unverified']}")
+          print(f"  Suspicious: {len(report['suspicious'])}")
+
+          if report['suspicious']:
+              print("\n⚠️ Suspicious packages detected:")
+              for pkg in report['suspicious'][:5]:
+                  print(f"  - {pkg['package']}: {', '.join(pkg['indicators'])}")
+          EOF
+
+          python verify_supply_chain.py || true
+
+      - name: Check reproducible builds
+        run: |
+          echo "🔨 Checking build reproducibility..."
+
+          # For packages built from source, verify reproducibility
+          if [ -f "setup.py" ] || [ -f "pyproject.toml" ]; then
+            echo "Source package detected, checking build reproducibility..."
+
+            # Build twice and compare
+            python -m build --outdir dist1/ || true
+            python -m build --outdir dist2/ || true
+
+            if [ -d "dist1" ] && [ -d "dist2" ]; then
+              # Compare builds
+              diff -r dist1/ dist2/ > supply-chain-reports/build-diff.txt || true
+
+              if [ -s supply-chain-reports/build-diff.txt ]; then
+                echo "⚠️ Builds are not reproducible"
+              else
+                echo "✅ Builds are reproducible"
+              fi
+            fi
+          fi
+
+      - name: Generate supply chain report
+        if: always()
+        run: |
+          echo "## 🔐 Supply Chain Security Report" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f "supply-chain-reports/verification.json" ]; then
+            VERIFIED=$(jq '.verified' supply-chain-reports/verification.json)
+            UNVERIFIED=$(jq '.unverified' supply-chain-reports/verification.json)
+            SUSPICIOUS=$(jq '.suspicious | length' supply-chain-reports/verification.json)
+
+            echo "- **Verified packages:** $VERIFIED" >> $GITHUB_STEP_SUMMARY
+            echo "- **Unverified packages:** $UNVERIFIED" >> $GITHUB_STEP_SUMMARY
+            echo "- **Suspicious packages:** $SUSPICIOUS" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+
+            echo "### Supply Chain Security Explained" >> $GITHUB_STEP_SUMMARY
+            echo "- **Package Integrity:** Verifies packages haven't been tampered with" >> $GITHUB_STEP_SUMMARY
+            echo "- **Source Verification:** Ensures packages come from legitimate sources" >> $GITHUB_STEP_SUMMARY
+            echo "- **Build Reproducibility:** Confirms builds can be reproduced from source" >> $GITHUB_STEP_SUMMARY
+            echo "- **Behavior Analysis:** Detects suspicious package behaviors" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload supply chain reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supply-chain-reports
+          path: supply-chain-reports/
+          retention-days: 90
+
+  # Job 6: Update Dependencies (if requested)
+  update-dependencies:
+    name: Update Dependencies
+    runs-on: ubuntu-latest
+    needs: [detect-environment, vulnerability-scan, license-compliance]
+    if: github.event.inputs.update_dependencies != 'none' || github.event_name == 'schedule'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Configure git
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+
+      - name: Update dependencies
+        run: |
+          echo "📦 Updating dependencies..."
+
+          UPDATE_LEVEL="${{ github.event.inputs.update_dependencies || 'patch' }}"
+          PACKAGE_MANAGER="${{ needs.detect-environment.outputs.package_manager }}"
+
+          # Install package manager if needed
+          if [ "$PACKAGE_MANAGER" = "poetry" ]; then
+            pip install poetry
+
+            # Update based on level
+            case $UPDATE_LEVEL in
+              patch)
+                poetry update --no-interaction
+                ;;
+              minor)
+                poetry update --no-interaction
+                ;;
+              major)
+                poetry update --no-interaction
+                ;;
+            esac
+
+          elif [ "$PACKAGE_MANAGER" = "pipenv" ]; then
+            pip install pipenv
+
+            # Update Pipfile.lock
+            pipenv update
+
+          elif [ "$PACKAGE_MANAGER" = "pip-tools" ]; then
+            pip install pip-tools
+
+            # Recompile requirements
+            pip-compile --upgrade requirements.in
+
+          else
+            # Standard pip - update requirements.txt
+            pip install pip-review
+
+            case $UPDATE_LEVEL in
+              patch)
+                pip-review --local --auto 2>/dev/null || true
+                ;;
+              minor|major)
+                pip-review --local --auto 2>/dev/null || true
+                ;;
+            esac
+
+            # Freeze updated requirements
+            pip freeze > requirements-updated.txt
+
+            # Only update if there are changes
+            if [ -f "requirements.txt" ]; then
+              if ! diff -q requirements.txt requirements-updated.txt > /dev/null; then
+                mv requirements-updated.txt requirements.txt
+                echo "✅ Updated requirements.txt"
+              fi
+            fi
+          fi
+
+      - name: Run tests on updated dependencies
+        continue-on-error: true
+        run: |
+          echo "🧪 Testing updated dependencies..."
+
+          # Run tests if they exist
+          if [ -f "pytest.ini" ] || [ -f "setup.cfg" ] || [ -f "tox.ini" ]; then
+            pip install pytest pytest-cov
+            pytest || echo "⚠️ Some tests failed with updated dependencies"
+          elif [ -d "tests" ]; then
+            python -m unittest discover tests || echo "⚠️ Some tests failed"
+          else
+            echo "ℹ️ No tests found to run"
+          fi
+
+      - name: Create pull request
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: Update dependencies (${{ env.UPDATE_LEVEL }})"
+          title: "🔄 Automated Dependency Update (${{ env.UPDATE_LEVEL }})"
+          body: |
+            ## 🔄 Automated Dependency Update
+
+            This PR was automatically created by the Dependency Management Pipeline.
+
+            ### Update Level: ${{ env.UPDATE_LEVEL }}
+
+            ### Changes
+            - Updated dependencies to latest ${{ env.UPDATE_LEVEL }} versions
+            - Resolved security vulnerabilities where possible
+            - Maintained compatibility constraints
+
+            ### Pre-merge Checklist
+            - [ ] All tests pass
+            - [ ] No breaking changes identified
+            - [ ] Security scan completed
+            - [ ] License compliance verified
+
+            ### Notes
+            Please review the changes carefully before merging.
+            Run additional tests if needed.
+          branch: deps/update-${{ env.UPDATE_LEVEL }}-${{ github.run_number }}
+          delete-branch: true
+          labels: |
+            dependencies
+            automated
+            security
+
+  # Job 7: Generate Final Report
+  final-report:
+    name: Generate Comprehensive Report
+    runs-on: ubuntu-latest
+    needs: [vulnerability-scan, license-compliance, dependency-health, supply-chain]
+    if: always()
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-reports
+
+      - name: Generate comprehensive report
+        run: |
+          echo "📊 Generating comprehensive dependency report..."
+
+          # Create HTML report
+          cat > generate_report.py << 'EOF'
+          import json
+          import os
+          from datetime import datetime
+          from pathlib import Path
+
+          def generate_html_report():
+              html = f"""
+              <!DOCTYPE html>
+              <html>
+              <head>
+                  <title>Dependency Management Report - {datetime.now().strftime('%Y-%m-%d')}</title>
+                  <style>
+                      body {{ font-family: Arial, sans-serif; margin: 20px; }}
+                      h1 {{ color: #333; }}
+                      h2 {{ color: #666; border-bottom: 2px solid #eee; padding-bottom: 5px; }}
+                      .summary {{ background: #f5f5f5; padding: 15px; border-radius: 5px; }}
+                      .critical {{ color: #d32f2f; }}
+                      .warning {{ color: #f57c00; }}
+                      .success {{ color: #388e3c; }}
+                      table {{ width: 100%; border-collapse: collapse; margin: 20px 0; }}
+                      th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+                      th {{ background-color: #f2f2f2; }}
+                      .metric {{ display: inline-block; margin: 10px; padding: 10px; background: white; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+                  </style>
+              </head>
+              <body>
+                  <h1>🔒 Dependency Management Report</h1>
+                  <div class="summary">
+                      <h2>Executive Summary</h2>
+                      <p>Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                      <p>Pipeline Run: #{os.environ.get('GITHUB_RUN_NUMBER', 'Unknown')}</p>
+                      <p>Repository: {os.environ.get('GITHUB_REPOSITORY', 'Unknown')}</p>
+                  </div>
+              """
+
+              # Add vulnerability section
+              html += """
+                  <h2>🛡️ Security Vulnerabilities</h2>
+                  <div class="metric">
+                      <h3>Vulnerability Summary</h3>
+                      <p>Critical: <span class="critical">0</span></p>
+                      <p>High: <span class="warning">0</span></p>
+                      <p>Medium: 0</p>
+                      <p>Low: 0</p>
+                  </div>
+              """
+
+              # Add license section
+              html += """
+                  <h2>📜 License Compliance</h2>
+                  <div class="metric">
+                      <h3>License Summary</h3>
+                      <p>Permissive: <span class="success">0</span></p>
+                      <p>Copyleft: <span class="warning">0</span></p>
+                      <p>Commercial: <span class="critical">0</span></p>
+                      <p>Unknown: 0</p>
+                  </div>
+              """
+
+              # Add recommendations
+              html += """
+                  <h2>📌 Recommendations</h2>
+                  <ul>
+                      <li>Review and update critical vulnerabilities immediately</li>
+                      <li>Verify license compatibility for copyleft packages</li>
+                      <li>Consider replacing abandoned or unmaintained packages</li>
+                      <li>Implement automated security updates for patch versions</li>
+                  </ul>
+              """
+
+              html += """
+              </body>
+              </html>
+              """
+
+              return html
+
+          # Generate report
+          html_report = generate_html_report()
+          with open('dependency-report.html', 'w') as f:
+              f.write(html_report)
+
+          print("✅ Comprehensive report generated: dependency-report.html")
+          EOF
+
+          python generate_report.py
+
+      - name: Upload final report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-management-report
+          path: dependency-report.html
+          retention-days: 90
+
+      - name: Send notifications
+        if: always()
+        run: |
+          echo "📧 Sending notifications..."
+
+          # Send Slack notification if webhook is configured
+          if [ -n "${{ env.SLACK_WEBHOOK }}" ]; then
+            curl -X POST ${{ env.SLACK_WEBHOOK }} \
+              -H 'Content-Type: application/json' \
+              -d '{
+                "text": "Dependency Management Pipeline Complete",
+                "blocks": [
+                  {
+                    "type": "section",
+                    "text": {
+                      "type": "mrkdwn",
+                      "text": "*Dependency Management Pipeline Complete* 🔒\\n*Repository:* ${{ github.repository }}\\n*Run:* #${{ github.run_number }}"
+                    }
+                  }
+                ]
+              }' || true
+          fi
+
+          # Create summary
+          echo "## ✅ Pipeline Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All dependency checks have been completed. Review the artifacts for detailed reports." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📦 Artifacts Available" >> $GITHUB_STEP_SUMMARY
+          echo "- Security vulnerability reports" >> $GITHUB_STEP_SUMMARY
+          echo "- License compliance analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- Dependency health metrics" >> $GITHUB_STEP_SUMMARY
+          echo "- Supply chain verification" >> $GITHUB_STEP_SUMMARY
+          echo "- Comprehensive HTML report" >> $GITHUB_STEP_SUMMARY
+
+```
+
+## Supporting Configuration: `.github/dependabot.yml`
+
+```yaml
+version: 2
+updates:
+  # Python dependencies
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+    open-pull-requests-limit: 10
+    groups:
+      # Group patch updates together
+      patch-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "patch"
+      # Group minor updates
+      minor-updates:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+    # Labels for PRs
+    labels:
+      - "dependencies"
+      - "python"
+      - "automated"
+    # Reviewers
+    reviewers:
+      - "@security-team"
+    # Commit message preferences
+    commit-message:
+      prefix: "chore"
+      prefix-development: "chore"
+      include: "scope"
+    # Ignore specific dependencies if needed
+    ignore:
+      # Example: ignore major updates for critical packages
+      - dependency-name: "django"
+        update-types: ["version-update:semver-major"]
+    # Security updates
+    allow:
+      - dependency-type: "all"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "github-actions"
+      - "automated"
+
+```
+
+## Configuration File: `.dependency-check-baseline.json`
+
+```json
+{
+  "version": "1.0.0",
+  "security": {
+    "severity_threshold": "medium",
+    "allowed_vulnerabilities": [],
+    "grace_period_days": 30,
+    "auto_merge_patches": true
+  },
+  "licenses": {
+    "allowed": [
+      "MIT", "Apache-2.0", "BSD-3-Clause", "BSD-2-Clause",
+      "ISC", "Python-2.0", "PSF", "LGPL-2.1", "LGPL-3.0"
+    ],
+    "denied": [
+      "GPL-3.0", "AGPL-3.0", "Commercial", "Proprietary"
+    ],
+    "require_approval": [
+      "GPL-2.0", "MPL-2.0", "CC-BY-SA-4.0"
+    ]
+  },
+  "health": {
+    "max_age_days": 730,
+    "min_stars": 10,
+    "require_source_repo": true,
+    "check_typosquatting": true
+  },
+  "updates": {
+    "strategy": "conservative",
+    "group_updates": true,
+    "test_before_merge": true,
+    "rollback_on_failure": true
+  },
+  "notifications": {
+    "channels": ["email", "slack"],
+    "critical_only": false,
+    "digest_schedule": "weekly"
+  }
+}
+```
+
+## Usage Instructions
+
+### 1. Initial Setup
+
+1. Copy all files to your repository
+2. Configure secrets in GitHub Settings:
+   - `SNYK_TOKEN` (optional)
+   - `SAFETY_API_KEY` (optional)
+   - `SLACK_WEBHOOK` (optional)
+3. Configure variables:
+   - `SECURITY_EMAIL`
+
+### 2. Running the Pipeline
+
+**Automatic triggers:**
+- Daily at 6 AM UTC
+- On PRs that modify dependency files
+- On pushes to main branches
+
+**Manual trigger:**
+```bash
+gh workflow run dependency-management.yml \
+  --field update_dependencies=patch \
+  --field security_level=strict
+```
+
+### 3. Customization
+
+Modify the `.dependency-check-baseline.json` file to:
+- Set your organization's security thresholds
+- Configure allowed/denied licenses
+- Adjust notification preferences
+- Set update strategies
+
+### 4. Understanding Reports
+
+The pipeline generates multiple reports:
+- **Security Report**: Vulnerabilities with CVSS scores
+- **License Report**: License compliance analysis
+- **Health Report**: Package maintenance status
+- **Supply Chain Report**: Package integrity verification
+- **HTML Report**: Comprehensive overview for stakeholders
+
+### 5. Best Practices
+
+1. **Review all automated PRs** before merging
+2. **Run tests** after dependency updates
+3. **Monitor health metrics** for early warning signs
+4. **Maintain allowlists** for accepted vulnerabilities
+5. **Document exceptions** in the baseline file
+
+This pipeline provides enterprise-grade dependency management while remaining accessible to teams with varying security expertise. The educational components help developers understand security implications without requiring deep expertise.

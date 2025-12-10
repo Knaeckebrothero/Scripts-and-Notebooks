@@ -1,0 +1,548 @@
+#!/bin/bash
+# tests/smoke-test.sh
+# Smoke test script for validating deployments
+
+set -e
+
+ENVIRONMENT=$1
+APP_URL=""
+HEALTH_ENDPOINT="/health"
+TIMEOUT=30
+
+# Set URL based on environment
+case $ENVIRONMENT in
+  production)
+    APP_URL="https://api.yourdomain.com"
+    ;;
+  staging)
+    APP_URL="https://staging-api.yourdomain.com"
+    ;;
+  development)
+    APP_URL="https://dev-api.yourdomain.com"
+    ;;
+  *)
+    echo "❌ Unknown environment: $ENVIRONMENT"
+    exit 1
+    ;;
+esac
+
+echo "🔍 Running smoke tests for $ENVIRONMENT"
+echo "   URL: $APP_URL"
+
+# Function to check endpoint
+check_endpoint() {
+  local endpoint=$1
+  local expected_status=${2:-200}
+
+  echo -n "   Checking $endpoint... "
+
+  response=$(curl -s -o /dev/null -w "%{http_code}" --connect-timeout 5 --max-time 10 "$APP_URL$endpoint")
+
+  if [ "$response" == "$expected_status" ]; then
+    echo "✅ ($response)"
+    return 0
+  else
+    echo "❌ (Expected: $expected_status, Got: $response)"
+    return 1
+  fi
+}
+
+# Run tests
+echo "📋 Starting tests..."
+
+# 1. Health check
+check_endpoint "/health" 200
+
+# 2. Readiness check
+check_endpoint "/health/ready" 200
+
+# 3. API version check
+check_endpoint "/api/version" 200
+
+# 4. Main endpoint
+check_endpoint "/" 200
+
+# 5. Check metrics endpoint (if enabled)
+if [ "$ENVIRONMENT" != "production" ]; then
+  check_endpoint "/metrics" 200
+fi
+
+# 6. Application-specific tests
+case $ENVIRONMENT in
+  production)
+    # Production-specific tests
+    check_endpoint "/api/v1/status" 200
+    ;;
+  staging)
+    # Staging-specific tests
+    check_endpoint "/api/v1/test" 200
+    ;;
+  development)
+    # Development-specific tests
+    check_endpoint "/debug/vars" 200
+    ;;
+esac
+
+echo "✅ All smoke tests passed for $ENVIRONMENT"
+exit 0
+
+---
+
+#!/bin/bash
+# scripts/migrate-to-unified-pipeline.sh
+# Script to help migrate from multiple pipelines to unified CI/CD
+
+set -e
+
+echo "🔄 CI/CD Pipeline Migration Tool"
+echo "================================="
+echo ""
+
+# Check if we're in a git repository
+if ! git rev-parse --git-dir > /dev/null 2>&1; then
+  echo "❌ Error: Not in a git repository"
+  exit 1
+fi
+
+REPO_ROOT=$(git rev-parse --show-toplevel)
+cd "$REPO_ROOT"
+
+echo "📁 Repository: $REPO_ROOT"
+echo ""
+
+# Step 1: Backup existing workflows
+echo "📦 Step 1: Backing up existing workflows..."
+if [ -d ".github/workflows" ]; then
+  mkdir -p .github/workflows/backup
+  cp .github/workflows/*.yml .github/workflows/backup/ 2>/dev/null || true
+  cp .github/workflows/*.yaml .github/workflows/backup/ 2>/dev/null || true
+  echo "   ✅ Backed up to .github/workflows/backup/"
+else
+  echo "   ⏭️ No existing workflows found"
+fi
+
+# Step 2: Identify existing pipelines
+echo ""
+echo "🔍 Step 2: Analyzing existing pipelines..."
+FOUND_PIPELINES=""
+
+if [ -f ".github/workflows/trivy.yml" ] || [ -f ".github/workflows/trivy.yaml" ]; then
+  echo "   ✓ Found: Security scanning pipeline (trivy)"
+  FOUND_PIPELINES="$FOUND_PIPELINES security"
+fi
+
+if [ -f ".github/workflows/docker.yml" ] || [ -f ".github/workflows/container.yml" ]; then
+  echo "   ✓ Found: Container build pipeline"
+  FOUND_PIPELINES="$FOUND_PIPELINES container"
+fi
+
+if [ -f ".github/workflows/release.yml" ] || [ -f ".github/workflows/release.yaml" ]; then
+  echo "   ✓ Found: Release pipeline"
+  FOUND_PIPELINES="$FOUND_PIPELINES release"
+fi
+
+if [ -f ".github/workflows/deploy.yml" ] || [ -f ".github/workflows/deployment.yml" ]; then
+  echo "   ✓ Found: Deployment pipeline"
+  FOUND_PIPELINES="$FOUND_PIPELINES deploy"
+fi
+
+# Step 3: Create directory structure
+echo ""
+echo "📂 Step 3: Creating directory structure..."
+
+mkdir -p k8s/base
+mkdir -p k8s/overlays/development
+mkdir -p k8s/overlays/staging
+mkdir -p k8s/overlays/production
+mkdir -p tests
+mkdir -p scripts
+
+echo "   ✅ Created Kubernetes manifest directories"
+
+# Step 4: Detect project configuration
+echo ""
+echo "🔎 Step 4: Detecting project configuration..."
+
+# Detect Dockerfile location
+DOCKERFILE_PATH=""
+if [ -f "Dockerfile" ]; then
+  DOCKERFILE_PATH="Dockerfile"
+elif [ -f "deployment/Dockerfile" ]; then
+  DOCKERFILE_PATH="deployment/Dockerfile"
+else
+  echo "   ⚠️ No Dockerfile found - you'll need to create one"
+fi
+
+if [ -n "$DOCKERFILE_PATH" ]; then
+  echo "   ✓ Dockerfile: $DOCKERFILE_PATH"
+fi
+
+# Detect Python version
+PYTHON_VERSION="3.11"
+if [ -f ".python-version" ]; then
+  PYTHON_VERSION=$(cat .python-version | tr -d '[:space:]')
+  echo "   ✓ Python version: $PYTHON_VERSION"
+fi
+
+# Detect registry
+REGISTRY="ghcr.io"
+if grep -q "docker.io" .github/workflows/*.yml 2>/dev/null; then
+  REGISTRY="docker.io"
+fi
+echo "   ✓ Registry: $REGISTRY"
+
+# Step 5: Generate configuration file
+echo ""
+echo "📝 Step 5: Generating configuration..."
+
+cat > .github/pipeline-config.yml << EOF
+# CI/CD Pipeline Configuration
+# Generated on $(date)
+
+# Container Settings
+registry: ${REGISTRY}
+dockerfile_path: ${DOCKERFILE_PATH}
+python_version: ${PYTHON_VERSION}
+
+# Features
+enable_security_scan: true
+enable_changelog: true
+enable_k8s_deploy: false  # Enable when K8s is configured
+use_conventional_commits: true
+
+# Kubernetes Namespaces
+k8s_namespace_dev: development
+k8s_namespace_staging: staging
+k8s_namespace_prod: production
+
+# Version Strategy
+versioning:
+  strategy: semantic  # semantic or manual
+  initial_version: 0.1.0
+
+# Notifications
+notifications:
+  slack_enabled: false
+  email_enabled: false
+EOF
+
+echo "   ✅ Created .github/pipeline-config.yml"
+
+# Step 6: Add the unified pipeline
+echo ""
+echo "📥 Step 6: Installing unified pipeline..."
+
+# Check if complete-cicd.yml already exists
+if [ -f ".github/workflows/complete-cicd.yml" ]; then
+  echo "   ⚠️ complete-cicd.yml already exists - skipping"
+else
+  echo "   ℹ️ Add complete-cicd.yml to .github/workflows/"
+  echo "   ℹ️ (Copy from the provided artifacts)"
+fi
+
+# Step 7: Setup git hooks for conventional commits
+echo ""
+echo "🪝 Step 7: Setting up git hooks..."
+
+cat > .gitmessage << 'EOF'
+# <type>(<scope>): <subject>
+#
+# <body>
+#
+# <footer>
+#
+# Type must be one of:
+#   feat:     new feature (minor version bump)
+#   fix:      bug fix (patch version bump)
+#   docs:     documentation only
+#   style:    formatting, missing semicolons, etc
+#   refactor: code restructuring
+#   perf:     performance improvement
+#   test:     adding tests
+#   chore:    maintenance
+#   ci:       CI/CD changes
+#
+# Breaking changes: add ! after type or BREAKING CHANGE in footer
+EOF
+
+git config commit.template .gitmessage
+echo "   ✅ Configured git commit template"
+
+# Step 8: Create migration checklist
+echo ""
+echo "📋 Step 8: Creating migration checklist..."
+
+cat > MIGRATION_CHECKLIST.md << 'EOF'
+# CI/CD Pipeline Migration Checklist
+
+## Pre-Migration
+- [ ] Backup existing workflows
+- [ ] Document current deployment process
+- [ ] Identify all secrets and variables needed
+
+## Repository Setup
+- [ ] Add complete-cicd.yml to .github/workflows/
+- [ ] Configure repository variables in Settings
+- [ ] Add Kubernetes secrets (KUBECONFIG_DEV, etc.) if using K8s
+- [ ] Enable branch protection rules
+
+## Configuration
+- [ ] Set DOCKERFILE_PATH variable
+- [ ] Set REGISTRY variable (ghcr.io or docker.io)
+- [ ] Configure ENABLE_K8S_DEPLOY if using Kubernetes
+- [ ] Set up conventional commits
+
+## Testing
+- [ ] Test PR workflow (create test PR)
+- [ ] Test build process
+- [ ] Test security scanning
+- [ ] Test version bumping
+- [ ] Test changelog generation
+- [ ] Test deployment (if configured)
+
+## Cleanup
+- [ ] Remove old workflow files
+- [ ] Update documentation
+- [ ] Train team on conventional commits
+- [ ] Monitor first few deployments
+
+## Post-Migration
+- [ ] Review pipeline metrics
+- [ ] Optimize build times
+- [ ] Adjust security thresholds
+- [ ] Document lessons learned
+EOF
+
+echo "   ✅ Created MIGRATION_CHECKLIST.md"
+
+# Step 9: Summary
+echo ""
+echo "✨ Migration preparation complete!"
+echo ""
+echo "📋 Next Steps:"
+echo "1. Review .github/pipeline-config.yml and adjust settings"
+echo "2. Add complete-cicd.yml to .github/workflows/"
+echo "3. Configure repository secrets and variables in GitHub Settings"
+echo "4. Follow MIGRATION_CHECKLIST.md"
+echo "5. Test with a PR before removing old workflows"
+echo ""
+echo "📚 Resources:"
+echo "   • Conventional Commits: https://www.conventionalcommits.org/"
+echo "   • GitHub Actions: https://docs.github.com/en/actions"
+echo "   • Migration Guide: See the documentation artifacts"
+echo ""
+
+# Step 10: Git status
+echo "📊 Git Status:"
+git status --short
+
+echo ""
+echo "💡 Tip: Start by testing in a feature branch:"
+echo "   git checkout -b feature/unified-pipeline"
+echo "   git add ."
+echo "   git commit -m 'ci: migrate to unified CI/CD pipeline'"
+echo ""
+
+---
+
+#!/bin/bash
+# scripts/validate-k8s-setup.sh
+# Validate Kubernetes setup for the pipeline
+
+set -e
+
+echo "🔍 Kubernetes Setup Validator"
+echo "============================="
+echo ""
+
+# Check for kubectl
+if ! command -v kubectl &> /dev/null; then
+  echo "❌ kubectl not found. Please install kubectl first."
+  exit 1
+fi
+
+echo "✅ kubectl found: $(kubectl version --client --short)"
+
+# Function to validate kubeconfig
+validate_kubeconfig() {
+  local env=$1
+  local kubeconfig_var=$2
+
+  echo ""
+  echo "Checking $env environment..."
+
+  if [ -z "${!kubeconfig_var}" ]; then
+    echo "   ⚠️ $kubeconfig_var not set"
+    return 1
+  fi
+
+  # Try to use the kubeconfig
+  echo "${!kubeconfig_var}" | base64 -d > /tmp/test-kubeconfig
+
+  if KUBECONFIG=/tmp/test-kubeconfig kubectl cluster-info &> /dev/null; then
+    echo "   ✅ $env cluster accessible"
+
+    # Check namespaces
+    local namespace="${3:-$env}"
+    if KUBECONFIG=/tmp/test-kubeconfig kubectl get namespace "$namespace" &> /dev/null; then
+      echo "   ✅ Namespace '$namespace' exists"
+    else
+      echo "   ⚠️ Namespace '$namespace' not found"
+      echo "      Run: kubectl create namespace $namespace"
+    fi
+  else
+    echo "   ❌ Cannot connect to $env cluster"
+    return 1
+  fi
+
+  rm -f /tmp/test-kubeconfig
+}
+
+# Check environment variables
+echo "Environment Variables Check:"
+echo "----------------------------"
+
+# Check for kubeconfig secrets (these would be GitHub secrets)
+if [ -n "$GITHUB_ACTIONS" ]; then
+  echo "Running in GitHub Actions environment"
+  validate_kubeconfig "development" "KUBECONFIG_DEV" "development"
+  validate_kubeconfig "staging" "KUBECONFIG_STAGING" "staging"
+  validate_kubeconfig "production" "KUBECONFIG_PROD" "production"
+else
+  echo "Running locally - checking local kubeconfig"
+
+  if [ -f "$HOME/.kube/config" ]; then
+    echo "✅ Local kubeconfig found"
+
+    # Check contexts
+    echo ""
+    echo "Available contexts:"
+    kubectl config get-contexts -o name | while read context; do
+      echo "   • $context"
+    done
+  else
+    echo "❌ No kubeconfig found at $HOME/.kube/config"
+  fi
+fi
+
+# Check for required K8s resources
+echo ""
+echo "Kubernetes Resources Check:"
+echo "---------------------------"
+
+# Check for ingress controller
+if kubectl get namespace ingress-nginx &> /dev/null; then
+  echo "✅ Ingress controller namespace found"
+else
+  echo "⚠️ No ingress-nginx namespace found"
+  echo "   Install: kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.1/deploy/static/provider/cloud/deploy.yaml"
+fi
+
+# Check for cert-manager (optional)
+if kubectl get namespace cert-manager &> /dev/null; then
+  echo "✅ cert-manager found (for TLS)"
+else
+  echo "ℹ️ cert-manager not found (optional, for automatic TLS)"
+fi
+
+# Check for metrics server
+if kubectl get deployment metrics-server -n kube-system &> /dev/null; then
+  echo "✅ Metrics server found (for HPA)"
+else
+  echo "⚠️ Metrics server not found (needed for autoscaling)"
+fi
+
+echo ""
+echo "📋 Summary"
+echo "----------"
+echo "If all checks pass, your Kubernetes setup is ready for the pipeline."
+echo "If not, address the warnings above before enabling K8s deployment."
+echo ""
+echo "To enable K8s deployment in the pipeline:"
+echo "  1. Set ENABLE_K8S_DEPLOY=true in repository variables"
+echo "  2. Add KUBECONFIG secrets for each environment"
+echo "  3. Ensure namespaces exist in each cluster"
+echo ""
+
+---
+
+# scripts/setup-github-variables.sh
+#!/bin/bash
+# Script to set up GitHub repository variables via CLI
+
+echo "🔧 GitHub Repository Variables Setup"
+echo "===================================="
+echo ""
+
+# Check for gh CLI
+if ! command -v gh &> /dev/null; then
+  echo "❌ GitHub CLI (gh) not found."
+  echo "   Install: https://cli.github.com/"
+  exit 1
+fi
+
+# Check authentication
+if ! gh auth status &> /dev/null; then
+  echo "❌ Not authenticated with GitHub"
+  echo "   Run: gh auth login"
+  exit 1
+fi
+
+# Get repository
+REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+echo "📦 Repository: $REPO"
+echo ""
+
+# Function to set variable
+set_variable() {
+  local name=$1
+  local value=$2
+  local env=${3:-""}
+
+  if [ -n "$env" ]; then
+    gh variable set "$name" --body "$value" --env "$env"
+    echo "   ✅ Set $name=$value for environment: $env"
+  else
+    gh variable set "$name" --body "$value"
+    echo "   ✅ Set $name=$value"
+  fi
+}
+
+echo "📝 Setting repository variables..."
+
+# Container settings
+set_variable "REGISTRY" "ghcr.io"
+set_variable "DOCKERFILE_PATH" "./Dockerfile"
+set_variable "DOCKER_CONTEXT" "."
+set_variable "PLATFORMS" "linux/amd64,linux/arm64"
+set_variable "PYTHON_VERSION" "3.11"
+
+# Security settings
+set_variable "ENABLE_SECURITY_SCAN" "true"
+set_variable "TRIVY_SEVERITY" "CRITICAL,HIGH,MEDIUM"
+set_variable "FAIL_ON_CRITICAL" "false"
+set_variable "SECURITY_SCAN_ON_PR" "true"
+
+# Feature flags
+set_variable "ENABLE_CHANGELOG" "true"
+set_variable "ENABLE_SBOM" "true"
+set_variable "ENABLE_SIGNING" "false"
+set_variable "ENABLE_K8S_DEPLOY" "false"
+set_variable "USE_CONVENTIONAL_COMMITS" "true"
+
+# Kubernetes namespaces
+set_variable "K8S_NAMESPACE_DEV" "development"
+set_variable "K8S_NAMESPACE_STAGING" "staging"
+set_variable "K8S_NAMESPACE_PROD" "production"
+
+echo ""
+echo "✅ Repository variables configured!"
+echo ""
+echo "📋 Next steps:"
+echo "1. Add secrets (KUBECONFIG_*) if using Kubernetes"
+echo "2. Enable K8S_DEPLOY when ready"
+echo "3. Configure team to use conventional commits"
+echo ""
+echo "View all variables:"
+echo "  gh variable list"
+echo ""

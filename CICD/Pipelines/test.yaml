@@ -1,0 +1,846 @@
+name: Python Test Pipeline
+
+# ============================================================================
+# TRIGGERS
+# ============================================================================
+on:
+  # Trigger on push to any branch
+  push:
+    branches:
+      - '**'
+    # Only run when code changes, not documentation
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**.md'
+      - 'LICENSE'
+      - '.gitignore'
+
+  # Trigger on pull requests
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/**.md'
+
+  # Scheduled daily runs for flaky test detection
+  schedule:
+    # Run at 2 AM UTC every day
+    - cron: '0 2 * * *'
+
+  # Manual trigger with test selection options
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Test type to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - unit
+          - integration
+          - e2e
+          - performance
+          - security
+          - smoke
+      python_version:
+        description: 'Python version (leave empty for matrix)'
+        required: false
+        type: string
+      coverage_threshold:
+        description: 'Minimum coverage percentage'
+        required: false
+        type: string
+        default: '80'
+      debug_mode:
+        description: 'Enable debug mode'
+        required: false
+        type: boolean
+        default: false
+
+# ============================================================================
+# ENVIRONMENT VARIABLES
+# ============================================================================
+env:
+  # Default Python version for non-matrix jobs
+  DEFAULT_PYTHON: '3.11'
+
+  # Coverage settings
+  COVERAGE_THRESHOLD: ${{ inputs.coverage_threshold || '80' }}
+
+  # Caching
+  PIP_CACHE_DIR: ${{ github.workspace }}/.pip_cache
+
+  # Pytest settings
+  PYTEST_ADDOPTS: '--tb=short --strict-markers --color=yes'
+
+  # Parallel execution
+  PYTEST_XDIST_WORKERS: 'auto'
+
+  # Timezone for consistent testing
+  TZ: 'UTC'
+
+  # Feature flags for testing
+  ENABLE_EXPERIMENTAL_FEATURES: ${{ github.event_name == 'schedule' }}
+
+# ============================================================================
+# CONCURRENCY CONTROL
+# ============================================================================
+concurrency:
+  # Cancel in-progress runs for the same branch/PR
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# ============================================================================
+# JOBS
+# ============================================================================
+jobs:
+  # --------------------------------------------------------------------------
+  # JOB: Determine what to test
+  # --------------------------------------------------------------------------
+  test-selection:
+    name: Determine Test Scope
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      run_unit: ${{ steps.determine.outputs.run_unit }}
+      run_integration: ${{ steps.determine.outputs.run_integration }}
+      run_e2e: ${{ steps.determine.outputs.run_e2e }}
+      run_performance: ${{ steps.determine.outputs.run_performance }}
+      run_security: ${{ steps.determine.outputs.run_security }}
+      affected_tests: ${{ steps.impact.outputs.affected_tests }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for impact analysis
+
+      - name: Determine test types to run
+        id: determine
+        run: |
+          # For manual runs, respect the input
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            case "${{ inputs.test_type }}" in
+              all)
+                echo "run_unit=true" >> $GITHUB_OUTPUT
+                echo "run_integration=true" >> $GITHUB_OUTPUT
+                echo "run_e2e=true" >> $GITHUB_OUTPUT
+                echo "run_performance=true" >> $GITHUB_OUTPUT
+                echo "run_security=true" >> $GITHUB_OUTPUT
+                ;;
+              unit)
+                echo "run_unit=true" >> $GITHUB_OUTPUT
+                ;;
+              integration)
+                echo "run_integration=true" >> $GITHUB_OUTPUT
+                ;;
+              e2e)
+                echo "run_e2e=true" >> $GITHUB_OUTPUT
+                ;;
+              performance)
+                echo "run_performance=true" >> $GITHUB_OUTPUT
+                ;;
+              security)
+                echo "run_security=true" >> $GITHUB_OUTPUT
+                ;;
+            esac
+          # For scheduled runs, run everything
+          elif [[ "${{ github.event_name }}" == "schedule" ]]; then
+            echo "run_unit=true" >> $GITHUB_OUTPUT
+            echo "run_integration=true" >> $GITHUB_OUTPUT
+            echo "run_e2e=true" >> $GITHUB_OUTPUT
+            echo "run_performance=true" >> $GITHUB_OUTPUT
+            echo "run_security=true" >> $GITHUB_OUTPUT
+          # For PRs, run unit and integration by default
+          elif [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            echo "run_unit=true" >> $GITHUB_OUTPUT
+            echo "run_integration=true" >> $GITHUB_OUTPUT
+            echo "run_security=true" >> $GITHUB_OUTPUT
+            # Run E2E only if labeled
+            if [[ "${{ contains(github.event.pull_request.labels.*.name, 'e2e-required') }}" == "true" ]]; then
+              echo "run_e2e=true" >> $GITHUB_OUTPUT
+            fi
+          # For pushes to main/master, run unit, integration, and security
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]] || [[ "${{ github.ref }}" == "refs/heads/master" ]]; then
+            echo "run_unit=true" >> $GITHUB_OUTPUT
+            echo "run_integration=true" >> $GITHUB_OUTPUT
+            echo "run_security=true" >> $GITHUB_OUTPUT
+          # For other pushes, run unit tests only
+          else
+            echo "run_unit=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set Python version matrix
+        id: set-matrix
+        run: |
+          if [[ -n "${{ inputs.python_version }}" ]]; then
+            # Manual override
+            echo "matrix={\"python-version\":[\"${{ inputs.python_version }}\"]}" >> $GITHUB_OUTPUT
+          else
+            # Default matrix
+            echo "matrix={\"python-version\":[\"3.9\",\"3.10\",\"3.11\",\"3.12\"]}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Analyze test impact
+        id: impact
+        if: github.event_name == 'pull_request'
+        run: |
+          # Get changed files
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep -E '\.(py|yaml|yml|toml|cfg|ini)$' || true)
+
+          # Determine affected test files based on changed source files
+          # This is a simplified version - in production, use proper test impact analysis tools
+          if [[ -n "$CHANGED_FILES" ]]; then
+            AFFECTED_TESTS=""
+            for file in $CHANGED_FILES; do
+              # Map source files to test files
+              if [[ $file == *.py ]] && [[ $file != tests/* ]]; then
+                TEST_FILE="tests/unit/test_$(basename $file)"
+                if [[ -f $TEST_FILE ]]; then
+                  AFFECTED_TESTS="$AFFECTED_TESTS $TEST_FILE"
+                fi
+              fi
+            done
+            echo "affected_tests=$AFFECTED_TESTS" >> $GITHUB_OUTPUT
+          else
+            echo "affected_tests=" >> $GITHUB_OUTPUT
+          fi
+
+  # --------------------------------------------------------------------------
+  # JOB: Lint and Static Analysis
+  # --------------------------------------------------------------------------
+  lint:
+    name: Lint and Static Analysis
+    runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-lint-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-lint-
+
+      - name: Install linting tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff mypy black isort bandit safety
+
+      - name: Run formatters check
+        run: |
+          echo "::group::Black formatting"
+          black --check --diff .
+          echo "::endgroup::"
+
+          echo "::group::isort import sorting"
+          isort --check-only --diff .
+          echo "::endgroup::"
+
+      - name: Run linters
+        run: |
+          echo "::group::Ruff linting"
+          ruff check .
+          echo "::endgroup::"
+
+          echo "::group::MyPy type checking"
+          mypy . || echo "::warning::MyPy found issues"
+          echo "::endgroup::"
+
+      - name: Security scanning
+        run: |
+          echo "::group::Bandit security linting"
+          bandit -r . -f json -o bandit-report.json || true
+          echo "::endgroup::"
+
+          echo "::group::Safety dependency scanning"
+          safety check --json || echo "::warning::Safety found vulnerable dependencies"
+          echo "::endgroup::"
+
+      - name: Upload security reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports
+          path: |
+            bandit-report.json
+
+  # --------------------------------------------------------------------------
+  # JOB: Unit Tests
+  # --------------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests (Python ${{ matrix.python-version }})
+    needs: [test-selection]
+    if: needs.test-selection.outputs.run_unit == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.test-selection.outputs.matrix) }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      - name: Install system dependencies
+        run: |
+          # Add any system dependencies here
+          sudo apt-get update
+          sudo apt-get install -y libxml2-dev libxslt-dev
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+
+          # Install main dependencies
+          if [[ -f requirements.txt ]]; then
+            pip install -r requirements.txt
+          elif [[ -f pyproject.toml ]]; then
+            pip install -e .
+          fi
+
+          # Install test dependencies
+          if [[ -f tests/requirements-test.txt ]]; then
+            pip install -r tests/requirements-test.txt
+          else
+            pip install pytest pytest-cov pytest-xdist pytest-timeout pytest-mock pytest-benchmark
+          fi
+
+      - name: Run unit tests
+        id: test
+        run: |
+          # Determine which tests to run
+          if [[ -n "${{ needs.test-selection.outputs.affected_tests }}" ]] && [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            # Run only affected tests on PRs
+            TEST_ARGS="${{ needs.test-selection.outputs.affected_tests }}"
+          else
+            # Run all unit tests
+            TEST_ARGS="tests/unit"
+          fi
+
+          # Run tests with coverage
+          pytest $TEST_ARGS \
+            --cov=. \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-report=term \
+            --junitxml=junit-unit-${{ matrix.python-version }}.xml \
+            --timeout=60 \
+            -n $PYTEST_XDIST_WORKERS \
+            --maxfail=5 \
+            -m "not integration and not e2e and not slow" \
+            --benchmark-disable \
+            || echo "test_failed=true" >> $GITHUB_ENV
+
+      - name: Check coverage threshold
+        if: matrix.python-version == env.DEFAULT_PYTHON
+        run: |
+          coverage_percentage=$(python -c "import xml.etree.ElementTree as ET; root = ET.parse('coverage.xml').getroot(); print(float(root.get('line-rate')) * 100)")
+          echo "Coverage: ${coverage_percentage}%"
+
+          if (( $(echo "$coverage_percentage < $COVERAGE_THRESHOLD" | bc -l) )); then
+            echo "::error::Coverage ${coverage_percentage}% is below threshold ${COVERAGE_THRESHOLD}%"
+            exit 1
+          fi
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-unit-${{ matrix.python-version }}
+          path: |
+            junit-unit-*.xml
+            htmlcov/
+            coverage.xml
+
+      - name: Upload coverage to Codecov
+        if: matrix.python-version == env.DEFAULT_PYTHON
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: unit
+          name: unit-tests-${{ matrix.python-version }}
+          fail_ci_if_error: false
+
+  # --------------------------------------------------------------------------
+  # JOB: Integration Tests
+  # --------------------------------------------------------------------------
+  integration-tests:
+    name: Integration Tests (Python ${{ matrix.python-version }})
+    needs: [test-selection]
+    if: needs.test-selection.outputs.run_integration == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.test-selection.outputs.matrix) }}
+
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: test_db
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: root_password
+          MYSQL_DATABASE: test_db
+          MYSQL_USER: test_user
+          MYSQL_PASSWORD: test_password
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 3306:3306
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+      memcached:
+        image: memcached:1.6-alpine
+        ports:
+          - 11211:11211
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Cache pip packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-integration-${{ hashFiles('**/requirements*.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+
+          # Install main dependencies
+          if [[ -f requirements.txt ]]; then
+            pip install -r requirements.txt
+          elif [[ -f pyproject.toml ]]; then
+            pip install -e .[test,integration]
+          fi
+
+          # Install test dependencies
+          pip install pytest pytest-cov pytest-xdist pytest-timeout pytest-asyncio
+
+          # Install database drivers
+          pip install psycopg2-binary pymysql redis pymemcache
+
+      - name: Set up test environment
+        run: |
+          # Create test environment file
+          cat > .env.test <<EOF
+          DATABASE_URL_POSTGRES=postgresql://test_user:test_password@localhost:5432/test_db
+          DATABASE_URL_MYSQL=mysql://test_user:test_password@localhost:3306/test_db
+          REDIS_URL=redis://localhost:6379/0
+          MEMCACHED_HOST=localhost:11211
+          TEST_ENV=ci
+          EOF
+
+      - name: Wait for services
+        run: |
+          # Wait for PostgreSQL
+          until pg_isready -h localhost -p 5432; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+
+          # Wait for MySQL
+          until mysqladmin ping -h localhost --silent; do
+            echo "Waiting for MySQL..."
+            sleep 2
+          done
+
+      - name: Run integration tests
+        run: |
+          pytest tests/integration \
+            --cov=. \
+            --cov-report=xml \
+            --cov-report=term \
+            --junitxml=junit-integration-${{ matrix.python-version }}.xml \
+            --timeout=180 \
+            -n $PYTEST_XDIST_WORKERS \
+            -m "integration" \
+            --tb=short \
+            --reruns 2 \
+            --reruns-delay 5
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-integration-${{ matrix.python-version }}
+          path: |
+            junit-integration-*.xml
+            coverage.xml
+
+  # --------------------------------------------------------------------------
+  # JOB: End-to-End Tests
+  # --------------------------------------------------------------------------
+  e2e-tests:
+    name: E2E Tests
+    needs: [test-selection, unit-tests, integration-tests]
+    if: |
+      always() &&
+      needs.test-selection.outputs.run_e2e == 'true' &&
+      (needs.unit-tests.result == 'success' || needs.unit-tests.result == 'skipped') &&
+      (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON }}
+
+      - name: Install system dependencies for E2E
+        run: |
+          # Install headless Chrome dependencies
+          sudo apt-get update
+          sudo apt-get install -y \
+            chromium-browser \
+            xvfb \
+            x11-utils \
+            libx11-dev \
+            libxcomposite1 \
+            libxcursor1 \
+            libxdamage1 \
+            libxi6 \
+            libxtst6 \
+            libnss3 \
+            libcups2 \
+            libxss1 \
+            libxrandr2 \
+            libasound2 \
+            libpangocairo-1.0-0 \
+            libatk1.0-0 \
+            libcairo-gobject2 \
+            libgtk-3-0 \
+            libgbm1
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest playwright selenium pytest-playwright
+
+          # Install Playwright browsers
+          playwright install chromium
+
+      - name: Run E2E tests
+        run: |
+          # Run with virtual display for headless testing
+          xvfb-run -a pytest tests/e2e \
+            --junitxml=junit-e2e.xml \
+            --timeout=300 \
+            -v \
+            --maxfail=3 \
+            --screenshot=only-on-failure \
+            --video=retain-on-failure
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts
+          path: |
+            junit-e2e.xml
+            test-results/
+            screenshots/
+            videos/
+
+  # --------------------------------------------------------------------------
+  # JOB: Performance Tests
+  # --------------------------------------------------------------------------
+  performance-tests:
+    name: Performance Tests
+    needs: [test-selection]
+    if: |
+      needs.test-selection.outputs.run_performance == 'true' ||
+      github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON }}
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install pytest pytest-benchmark locust memory_profiler
+
+      - name: Run performance tests
+        run: |
+          # Run benchmark tests
+          pytest tests/performance \
+            --benchmark-only \
+            --benchmark-json=benchmark.json \
+            --benchmark-autosave \
+            --benchmark-compare-fail=min:10% \
+            -m "performance"
+
+      - name: Run load tests
+        if: github.event_name == 'schedule'
+        run: |
+          # Simple load test with locust
+          locust \
+            -f tests/performance/locustfile.py \
+            --headless \
+            --users 10 \
+            --spawn-rate 2 \
+            --run-time 60s \
+            --html performance-report.html \
+            || echo "::warning::Load tests completed with issues"
+
+      - name: Upload performance results
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results
+          path: |
+            .benchmarks/
+            benchmark.json
+            performance-report.html
+
+      - name: Comment performance results on PR
+        if: github.event_name == 'pull_request'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: 'pytest'
+          output-file-path: benchmark.json
+          comment-on-alert: true
+          alert-threshold: '110%'
+          fail-on-alert: false
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+  # --------------------------------------------------------------------------
+  # JOB: Security Tests
+  # --------------------------------------------------------------------------
+  security-tests:
+    name: Security Tests
+    needs: [test-selection]
+    if: needs.test-selection.outputs.run_security == 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Run SAST with Semgrep
+        uses: returntocorp/semgrep-action@v1
+        with:
+          generateSarif: true
+
+      - name: Check for secrets with TruffleHog
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: ${{ github.event.pull_request.base.sha || github.event.before }}
+          head: HEAD
+
+  # --------------------------------------------------------------------------
+  # JOB: Mutation Testing (Optional, expensive)
+  # --------------------------------------------------------------------------
+  mutation-tests:
+    name: Mutation Testing
+    needs: [unit-tests]
+    if: |
+      github.event_name == 'schedule' ||
+      contains(github.event.pull_request.labels.*.name, 'mutation-testing')
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON }}
+
+      - name: Install dependencies
+        run: |
+          pip install -e .
+          pip install mutmut pytest
+
+      - name: Run mutation tests
+        run: |
+          # Run mutation testing on critical modules
+          mutmut run \
+            --paths-to-mutate src/ \
+            --tests-dir tests/unit/ \
+            --runner "pytest -x" \
+            || true
+
+          # Generate results
+          mutmut results
+
+          # Create HTML report
+          mutmut html
+
+      - name: Upload mutation results
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutation-results
+          path: |
+            html/
+
+  # --------------------------------------------------------------------------
+  # JOB: Test Report Summary
+  # --------------------------------------------------------------------------
+  test-summary:
+    name: Test Report Summary
+    needs: [unit-tests, integration-tests, e2e-tests, performance-tests, security-tests]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download all test results
+        uses: actions/download-artifact@v4
+        with:
+          path: test-results
+          pattern: test-results-*
+
+      - name: Publish test results
+        uses: EnricoMi/publish-unit-test-result-action@v2
+        if: always()
+        with:
+          files: |
+            test-results/**/*.xml
+          check_name: 'Test Results Summary'
+          comment_mode: always
+
+      - name: Generate test report
+        if: always()
+        run: |
+          echo "## Test Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # Add status badges
+          echo "| Test Type | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+
+          # Check each job status
+          for job in unit-tests integration-tests e2e-tests performance-tests security-tests; do
+            status="${{ needs[job].result }}"
+            if [[ "$status" == "success" ]]; then
+              badge="✅ Passed"
+            elif [[ "$status" == "failure" ]]; then
+              badge="❌ Failed"
+            elif [[ "$status" == "skipped" ]]; then
+              badge="⏭️ Skipped"
+            else
+              badge="⚠️ Unknown"
+            fi
+            echo "| ${job} | ${badge} |" >> $GITHUB_STEP_SUMMARY
+          done
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- Test results and coverage reports are available in the artifacts section" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create issue for failures
+        if: |
+          failure() &&
+          (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+          github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = `Test Failure: ${context.workflow} - ${new Date().toISOString().split('T')[0]}`;
+            const body = `
+            ## Test Failure Report
+
+            **Workflow:** ${context.workflow}
+            **Run:** ${context.runNumber}
+            **Triggered by:** ${context.eventName}
+            **Branch:** ${context.ref}
+            **Commit:** ${context.sha}
+
+            ### Failed Jobs
+            ${Object.entries(needs).filter(([_, job]) => job.result === 'failure').map(([name]) => `- ${name}`).join('\n')}
+
+            [View Full Workflow Run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})
+            `;
+
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['test-failure', 'automated']
+            });

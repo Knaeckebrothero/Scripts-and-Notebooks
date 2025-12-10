@@ -1,0 +1,1153 @@
+# =============================================================================
+# Python Code Quality & Linting Pipeline
+# =============================================================================
+# This workflow provides comprehensive code quality checks for Python projects
+# with educational feedback to help developers learn best practices.
+#
+# Features:
+# - Progressive strictness levels (Starter/Standard/Strict/Enterprise)
+# - Educational feedback with learning resources
+# - Performance optimized with caching and parallel execution
+# - Supports multiple Python versions
+# - Inline PR annotations with fix suggestions
+# - Configurable per-project requirements
+#
+# Usage:
+# 1. Copy this file to .github/workflows/code-quality.yml
+# 2. Configure quality level in workflow inputs or environment variables
+# 3. Customize tool configurations in pyproject.toml or dedicated config files
+# 4. Set up branch protection rules to make checks required
+#
+# =============================================================================
+
+name: 🔍 Code Quality & Linting
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '**.py'
+      - 'pyproject.toml'
+      - 'setup.cfg'
+      - 'setup.py'
+      - 'requirements*.txt'
+      - '.github/workflows/code-quality.yml'
+
+  push:
+    branches: [main, develop, master]
+    paths:
+      - '**.py'
+
+  schedule:
+    # Weekly deep analysis on Monday at 3 AM UTC
+    - cron: '0 3 * * 1'
+
+  workflow_dispatch:
+    inputs:
+      quality_level:
+        description: 'Quality checking level'
+        required: false
+        default: 'standard'
+        type: choice
+        options:
+          - starter      # Basic formatting and critical errors
+          - standard     # Most rules enabled, balanced strictness
+          - strict       # All rules, low complexity thresholds
+          - enterprise   # Include security, compliance, audit
+      auto_fix:
+        description: 'Automatically fix issues and create PR'
+        required: false
+        default: false
+        type: boolean
+      tools:
+        description: 'Comma-separated list of tools to run (leave empty for all)'
+        required: false
+        default: ''
+        type: string
+      python_versions:
+        description: 'Comma-separated Python versions (e.g., "3.9,3.10,3.11")'
+        required: false
+        default: '3.9,3.10,3.11,3.12'
+        type: string
+
+# Environment variables for configuration
+env:
+  # Default quality level (can be overridden by workflow_dispatch)
+  DEFAULT_QUALITY_LEVEL: standard
+
+  # Performance settings
+  MAX_PARALLEL: 4
+  CACHE_VERSION: v1
+
+  # Reporting settings
+  ANNOTATIONS_LIMIT: 50  # Max inline annotations per tool
+
+  # Tool versions (pin for reproducibility)
+  RUFF_VERSION: "0.5.0"
+  BLACK_VERSION: "24.4.2"
+  MYPY_VERSION: "1.10.0"
+  PYLINT_VERSION: "3.2.0"
+  BANDIT_VERSION: "1.7.9"
+
+  # Educational mode
+  EDUCATIONAL_MODE: true
+
+  # Python version for non-matrix jobs
+  DEFAULT_PYTHON_VERSION: "3.11"
+
+jobs:
+  # =============================================================================
+  # JOB: Setup and Configuration Detection
+  # =============================================================================
+  setup:
+    name: 📋 Setup & Configuration
+    runs-on: ubuntu-latest
+    outputs:
+      quality_level: ${{ steps.config.outputs.quality_level }}
+      affected_files: ${{ steps.changes.outputs.files }}
+      python_versions: ${{ steps.config.outputs.python_versions }}
+      tools_to_run: ${{ steps.config.outputs.tools }}
+      project_type: ${{ steps.detect.outputs.project_type }}
+      has_tests: ${{ steps.detect.outputs.has_tests }}
+      config_files: ${{ steps.detect.outputs.config_files }}
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for better analysis
+
+      - name: 🔍 Detect project structure
+        id: detect
+        run: |
+          # Detect project type and structure
+          PROJECT_TYPE="unknown"
+          HAS_TESTS="false"
+          CONFIG_FILES=""
+
+          # Check for common Python project structures
+          if [ -f "pyproject.toml" ]; then
+            PROJECT_TYPE="modern"
+            CONFIG_FILES="pyproject.toml"
+          elif [ -f "setup.py" ]; then
+            PROJECT_TYPE="legacy"
+            CONFIG_FILES="setup.py"
+          fi
+
+          # Check for test directory
+          if [ -d "tests" ] || [ -d "test" ]; then
+            HAS_TESTS="true"
+          fi
+
+          # Check for configuration files
+          for config in .flake8 .pylintrc mypy.ini .pre-commit-config.yaml; do
+            if [ -f "$config" ]; then
+              CONFIG_FILES="$CONFIG_FILES,$config"
+            fi
+          done
+
+          echo "project_type=$PROJECT_TYPE" >> $GITHUB_OUTPUT
+          echo "has_tests=$HAS_TESTS" >> $GITHUB_OUTPUT
+          echo "config_files=$CONFIG_FILES" >> $GITHUB_OUTPUT
+
+          # Log findings for debugging
+          echo "📊 Project Detection Results:"
+          echo "  - Type: $PROJECT_TYPE"
+          echo "  - Has tests: $HAS_TESTS"
+          echo "  - Config files: $CONFIG_FILES"
+
+      - name: 📝 Determine configuration
+        id: config
+        run: |
+          # Determine quality level
+          QUALITY_LEVEL="${{ inputs.quality_level || env.DEFAULT_QUALITY_LEVEL }}"
+
+          # Check for project-specific override
+          if [ -f ".github/code-quality.json" ]; then
+            OVERRIDE=$(jq -r '.quality_level // empty' .github/code-quality.json)
+            if [ -n "$OVERRIDE" ]; then
+              QUALITY_LEVEL="$OVERRIDE"
+              echo "📌 Using project-specific quality level: $QUALITY_LEVEL"
+            fi
+          fi
+
+          echo "quality_level=$QUALITY_LEVEL" >> $GITHUB_OUTPUT
+
+          # Determine Python versions
+          if [ -n "${{ inputs.python_versions }}" ]; then
+            PYTHON_VERSIONS="${{ inputs.python_versions }}"
+          elif [ -f "pyproject.toml" ]; then
+            # Try to extract from pyproject.toml
+            PYTHON_VERSIONS=$(python3 -c "
+import tomllib
+with open('pyproject.toml', 'rb') as f:
+    data = tomllib.load(f)
+    versions = data.get('tool', {}).get('ci', {}).get('python_versions', '3.9,3.10,3.11,3.12')
+    print(versions)
+            " 2>/dev/null || echo "3.9,3.10,3.11,3.12")
+          else
+            PYTHON_VERSIONS="3.9,3.10,3.11,3.12"
+          fi
+
+          # Convert to JSON array for matrix
+          PYTHON_JSON=$(echo $PYTHON_VERSIONS | jq -R -c 'split(",")')
+          echo "python_versions=$PYTHON_JSON" >> $GITHUB_OUTPUT
+
+          # Determine tools to run
+          if [ -n "${{ inputs.tools }}" ]; then
+            echo "tools=${{ inputs.tools }}" >> $GITHUB_OUTPUT
+          else
+            # Select tools based on quality level
+            case $QUALITY_LEVEL in
+              starter)
+                echo "tools=formatting,ruff" >> $GITHUB_OUTPUT
+                ;;
+              standard)
+                echo "tools=formatting,ruff,mypy,complexity" >> $GITHUB_OUTPUT
+                ;;
+              strict)
+                echo "tools=formatting,ruff,flake8,mypy,pylint,complexity,docs" >> $GITHUB_OUTPUT
+                ;;
+              enterprise)
+                echo "tools=all" >> $GITHUB_OUTPUT
+                ;;
+              *)
+                echo "tools=formatting,ruff,mypy,complexity" >> $GITHUB_OUTPUT
+                ;;
+            esac
+          fi
+
+      - name: 🔍 Detect changed files (PR only)
+        id: changes
+        if: github.event_name == 'pull_request'
+        run: |
+          # Get list of changed Python files for incremental checking
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMRT \
+            ${{ github.event.pull_request.base.sha }}...${{ github.sha }} \
+            | grep '\.py$' | tr '\n' ' ' || echo "")
+
+          if [ -z "$CHANGED_FILES" ]; then
+            echo "files=" >> $GITHUB_OUTPUT
+          else
+            echo "files=$CHANGED_FILES" >> $GITHUB_OUTPUT
+            echo "📝 Changed Python files: $CHANGED_FILES"
+          fi
+
+  # =============================================================================
+  # JOB: Code Formatting
+  # =============================================================================
+  formatting:
+    name: 🎨 Code Formatting
+    runs-on: ubuntu-latest
+    needs: setup
+    if: contains(needs.setup.outputs.tools_to_run, 'formatting') || contains(needs.setup.outputs.tools_to_run, 'all')
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 📦 Install formatting tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            black==${{ env.BLACK_VERSION }} \
+            isort \
+            autopep8 \
+            prettier \
+            editorconfig-checker
+
+      - name: 🔍 Check EditorConfig compliance
+        run: |
+          echo "📏 Checking EditorConfig compliance..."
+          editorconfig-checker || true
+
+      - name: 🎨 Check Black formatting
+        id: black
+        run: |
+          echo "🎨 Checking code formatting with Black..."
+
+          if [ "${{ github.event_name }}" == "pull_request" ] && [ -n "${{ needs.setup.outputs.affected_files }}" ]; then
+            # Check only changed files in PR
+            black --check --diff ${{ needs.setup.outputs.affected_files }} 2>&1 | tee black_output.txt || echo "black_failed=true" >> $GITHUB_OUTPUT
+          else
+            # Check all Python files
+            black --check --diff . 2>&1 | tee black_output.txt || echo "black_failed=true" >> $GITHUB_OUTPUT
+          fi
+
+          # Educational feedback
+          if [ -f black_output.txt ] && grep -q "would reformat" black_output.txt; then
+            echo "::notice::💡 Black found formatting issues. Run 'black .' locally to auto-format your code."
+            echo "📚 Learn more about Black: https://black.readthedocs.io/en/stable/the_black_code_style/"
+          fi
+
+      - name: 📦 Check import sorting with isort
+        id: isort
+        run: |
+          echo "📦 Checking import sorting with isort..."
+
+          if [ "${{ github.event_name }}" == "pull_request" ] && [ -n "${{ needs.setup.outputs.affected_files }}" ]; then
+            isort --check-only --diff ${{ needs.setup.outputs.affected_files }} 2>&1 | tee isort_output.txt || echo "isort_failed=true" >> $GITHUB_OUTPUT
+          else
+            isort --check-only --diff . 2>&1 | tee isort_output.txt || echo "isort_failed=true" >> $GITHUB_OUTPUT
+          fi
+
+          if [ -f isort_output.txt ] && grep -q "ERROR" isort_output.txt; then
+            echo "::notice::💡 isort found import sorting issues. Run 'isort .' locally to auto-sort imports."
+            echo "📚 Learn about import sorting: https://peps.python.org/pep-0008/#imports"
+          fi
+
+      - name: 🔧 Auto-fix formatting issues (if enabled)
+        if: inputs.auto_fix == true && (steps.black.outputs.black_failed == 'true' || steps.isort.outputs.isort_failed == 'true')
+        run: |
+          echo "🔧 Auto-fixing formatting issues..."
+
+          # Configure git
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+          # Apply fixes
+          black .
+          isort .
+
+          # Create feature branch
+          BRANCH_NAME="auto-fix/formatting-$(date +%Y%m%d-%H%M%S)"
+          git checkout -b $BRANCH_NAME
+
+          # Commit changes
+          git add -A
+          git commit -m "🔧 Auto-fix: Apply Black and isort formatting
+
+          This commit automatically fixes:
+          - Code formatting issues (Black)
+          - Import sorting issues (isort)
+
+          Generated by GitHub Actions workflow." || echo "No changes to commit"
+
+          # Push branch
+          git push origin $BRANCH_NAME
+
+          # Create PR using GitHub CLI
+          gh pr create \
+            --title "🔧 Auto-fix: Code formatting improvements" \
+            --body "This PR automatically fixes formatting issues found by the code quality pipeline.
+
+            ## Changes made:
+            - ✅ Applied Black code formatting
+            - ✅ Sorted imports with isort
+
+            ## Next steps:
+            1. Review the changes
+            2. Run tests locally to ensure nothing broke
+            3. Merge if everything looks good
+
+            ---
+            *Generated automatically by GitHub Actions*" \
+            --base ${{ github.ref_name }} \
+            --head $BRANCH_NAME
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # =============================================================================
+  # JOB: Linting (Ruff, Flake8, Pylint)
+  # =============================================================================
+  linting:
+    name: 🔍 Linting Analysis
+    runs-on: ubuntu-latest
+    needs: setup
+    strategy:
+      matrix:
+        python-version: ${{ fromJson(needs.setup.outputs.python_versions) }}
+      fail-fast: false
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: 📦 Install dependencies and linting tools
+        run: |
+          python -m pip install --upgrade pip
+
+          # Install project dependencies if they exist
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          elif [ -f "pyproject.toml" ]; then
+            pip install -e .
+          fi
+
+          # Install linting tools
+          pip install \
+            ruff==${{ env.RUFF_VERSION }} \
+            flake8 \
+            flake8-docstrings \
+            flake8-bugbear \
+            flake8-comprehensions \
+            flake8-simplify \
+            pylint==${{ env.PYLINT_VERSION }} \
+            bandit[toml]==${{ env.BANDIT_VERSION }}
+
+      - name: 🚀 Run Ruff (Primary Linter)
+        id: ruff
+        if: contains(needs.setup.outputs.tools_to_run, 'ruff') || contains(needs.setup.outputs.tools_to_run, 'all')
+        run: |
+          echo "🚀 Running Ruff - Fast Python Linter"
+          echo "=================================="
+
+          # Configure based on quality level
+          QUALITY_LEVEL="${{ needs.setup.outputs.quality_level }}"
+
+          case $QUALITY_LEVEL in
+            starter)
+              RUFF_ARGS="--select E,F --ignore E501"
+              ;;
+            standard)
+              RUFF_ARGS="--select E,F,W,C,B,I --ignore E501"
+              ;;
+            strict|enterprise)
+              RUFF_ARGS="--select ALL"
+              ;;
+            *)
+              RUFF_ARGS=""
+              ;;
+          esac
+
+          if [ "${{ github.event_name }}" == "pull_request" ] && [ -n "${{ needs.setup.outputs.affected_files }}" ]; then
+            ruff check $RUFF_ARGS --output-format github ${{ needs.setup.outputs.affected_files }} 2>&1 | tee ruff_output.txt || true
+          else
+            ruff check $RUFF_ARGS --output-format github . 2>&1 | tee ruff_output.txt || true
+          fi
+
+          # Generate statistics
+          if [ -f ruff_output.txt ]; then
+            ISSUE_COUNT=$(grep -c "::error" ruff_output.txt || echo "0")
+            if [ "$ISSUE_COUNT" -gt 0 ]; then
+              echo "::notice::📊 Ruff found $ISSUE_COUNT issues to address"
+              echo "💡 Fix many issues automatically with: ruff check --fix"
+              echo "📚 Ruff rules reference: https://docs.astral.sh/ruff/rules/"
+            else
+              echo "::notice::✅ Ruff check passed - no issues found!"
+            fi
+          fi
+
+      - name: 🐛 Run Flake8 (Additional Checks)
+        if: |
+          (needs.setup.outputs.quality_level == 'strict' || needs.setup.outputs.quality_level == 'enterprise') &&
+          (contains(needs.setup.outputs.tools_to_run, 'flake8') || contains(needs.setup.outputs.tools_to_run, 'all'))
+        run: |
+          echo "🐛 Running Flake8 with plugins"
+          echo "=============================="
+
+          # Create config if it doesn't exist
+          if [ ! -f ".flake8" ] && [ ! -f "setup.cfg" ]; then
+            cat > .flake8 << EOF
+          [flake8]
+          max-line-length = 88
+          extend-ignore = E203,W503
+          max-complexity = 10
+          docstring-convention = google
+          EOF
+          fi
+
+          if [ "${{ github.event_name }}" == "pull_request" ] && [ -n "${{ needs.setup.outputs.affected_files }}" ]; then
+            flake8 ${{ needs.setup.outputs.affected_files }} --format='::error file=%(path)s,line=%(row)d,col=%(col)d::%(path)s:%(row)d:%(col)d: %(code)s %(text)s' || true
+          else
+            flake8 . --format='::error file=%(path)s,line=%(row)d,col=%(col)d::%(path)s:%(row)d:%(col)d: %(code)s %(text)s' || true
+          fi
+
+      - name: 🔮 Run Pylint (Comprehensive Analysis)
+        if: |
+          (needs.setup.outputs.quality_level == 'strict' || needs.setup.outputs.quality_level == 'enterprise') &&
+          (contains(needs.setup.outputs.tools_to_run, 'pylint') || contains(needs.setup.outputs.tools_to_run, 'all'))
+        run: |
+          echo "🔮 Running Pylint - Comprehensive Analysis"
+          echo "========================================="
+
+          # Configure based on quality level
+          if [ ! -f ".pylintrc" ]; then
+            pylint --generate-rcfile > .pylintrc
+            # Adjust for quality level
+            if [ "${{ needs.setup.outputs.quality_level }}" == "standard" ]; then
+              echo "disable=C0114,C0115,C0116,R0903" >> .pylintrc
+            fi
+          fi
+
+          # Find Python packages/modules
+          PYTHON_FILES=$(find . -name "*.py" -not -path "./venv/*" -not -path "./.venv/*" | head -20)
+
+          if [ -n "$PYTHON_FILES" ]; then
+            pylint $PYTHON_FILES --output-format=colorized --reports=y || true
+
+            # Educational message
+            echo "::notice::💡 Pylint provides comprehensive code analysis including:"
+            echo "  • Code style and formatting issues"
+            echo "  • Potential bugs and errors"
+            echo "  • Code smells and refactoring opportunities"
+            echo "  • Duplicate code detection"
+            echo "📚 Learn more: https://pylint.readthedocs.io/"
+          fi
+
+  # =============================================================================
+  # JOB: Type Checking
+  # =============================================================================
+  type-checking:
+    name: 🔍 Type Checking
+    runs-on: ubuntu-latest
+    needs: setup
+    if: contains(needs.setup.outputs.tools_to_run, 'mypy') || contains(needs.setup.outputs.tools_to_run, 'all')
+    strategy:
+      matrix:
+        python-version: ${{ fromJson(needs.setup.outputs.python_versions) }}
+      fail-fast: false
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+
+          # Install project dependencies
+          if [ -f "requirements.txt" ]; then
+            pip install -r requirements.txt
+          elif [ -f "pyproject.toml" ]; then
+            pip install -e .
+          fi
+
+          # Install type checking tools
+          pip install \
+            mypy==${{ env.MYPY_VERSION }} \
+            types-requests \
+            types-pyyaml \
+            types-python-dateutil
+
+      - name: 🔍 Configure MyPy
+        run: |
+          # Create mypy config based on quality level
+          QUALITY_LEVEL="${{ needs.setup.outputs.quality_level }}"
+
+          if [ ! -f "mypy.ini" ] && [ ! -f "pyproject.toml" ]; then
+            case $QUALITY_LEVEL in
+              starter)
+                cat > mypy.ini << EOF
+          [mypy]
+          python_version = ${{ matrix.python-version }}
+          warn_return_any = False
+          warn_unused_configs = True
+          ignore_missing_imports = True
+          no_implicit_optional = False
+          check_untyped_defs = False
+          EOF
+                ;;
+              standard)
+                cat > mypy.ini << EOF
+          [mypy]
+          python_version = ${{ matrix.python-version }}
+          warn_return_any = True
+          warn_unused_configs = True
+          ignore_missing_imports = True
+          no_implicit_optional = True
+          check_untyped_defs = True
+          warn_redundant_casts = True
+          EOF
+                ;;
+              strict|enterprise)
+                cat > mypy.ini << EOF
+          [mypy]
+          python_version = ${{ matrix.python-version }}
+          warn_return_any = True
+          warn_unused_configs = True
+          disallow_untyped_defs = True
+          disallow_any_unimported = False
+          no_implicit_optional = True
+          check_untyped_defs = True
+          warn_redundant_casts = True
+          warn_unused_ignores = True
+          warn_return_any = True
+          strict_equality = True
+          EOF
+                ;;
+            esac
+          fi
+
+      - name: 🏃 Run MyPy
+        run: |
+          echo "🔍 Running MyPy Type Checker"
+          echo "============================"
+
+          # Find packages to check
+          PACKAGES=$(find . -name "*.py" -not -path "./venv/*" -not -path "./.venv/*" | head -10 | xargs dirname | sort -u | head -5)
+
+          if [ -n "$PACKAGES" ]; then
+            for package in $PACKAGES; do
+              echo "Checking $package..."
+              mypy $package --show-error-codes --show-column-numbers --pretty || true
+            done
+
+            # Educational feedback
+            echo "::notice::💡 Type hints help catch bugs early and improve code maintainability!"
+            echo "📚 MyPy documentation: https://mypy.readthedocs.io/"
+            echo "📖 Python typing guide: https://docs.python.org/3/library/typing.html"
+
+            # Generate type coverage report
+            echo ""
+            echo "📊 Type Coverage Report"
+            echo "======================"
+            mypy $PACKAGES --html-report ./mypy_report || true
+
+            if [ -d "./mypy_report" ]; then
+              echo "📊 HTML report generated in mypy_report/"
+            fi
+          fi
+
+      - name: 📤 Upload type checking report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mypy-report-py${{ matrix.python-version }}
+          path: mypy_report/
+          if-no-files-found: ignore
+
+  # =============================================================================
+  # JOB: Security Analysis
+  # =============================================================================
+  security:
+    name: 🔒 Security Analysis
+    runs-on: ubuntu-latest
+    needs: setup
+    if: |
+      needs.setup.outputs.quality_level == 'enterprise' ||
+      contains(needs.setup.outputs.tools_to_run, 'bandit') ||
+      contains(needs.setup.outputs.tools_to_run, 'all')
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 📦 Install security tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            bandit[toml]==${{ env.BANDIT_VERSION }} \
+            safety \
+            pip-audit
+
+      - name: 🔒 Run Bandit Security Scan
+        run: |
+          echo "🔒 Running Bandit Security Analysis"
+          echo "==================================="
+
+          # Configure Bandit
+          if [ ! -f ".bandit" ]; then
+            cat > .bandit << EOF
+          [bandit]
+          exclude_dirs = ["/test", "/tests", "*/test/*", "*/tests/*"]
+          skips = []
+
+          # Test IDs to skip based on quality level
+          # B101: assert_used
+          # B601: paramiko_calls
+          # B602: subprocess_popen_with_shell_equals_true
+          EOF
+          fi
+
+          # Run Bandit with different severity levels
+          if [ "${{ needs.setup.outputs.quality_level }}" == "enterprise" ]; then
+            bandit -r . -ll -f json -o bandit-report.json || true
+            bandit -r . -ll -f txt || true
+          else
+            bandit -r . -lll -f json -o bandit-report.json || true
+            bandit -r . -lll -f txt || true
+          fi
+
+          # Parse and create GitHub annotations
+          if [ -f "bandit-report.json" ]; then
+            python3 - << 'EOF'
+          import json
+          with open('bandit-report.json') as f:
+              data = json.load(f)
+              if data.get('errors'):
+                  for error in data['errors'][:50]:  # Limit annotations
+                      print(f"::error file={error.get('filename', '')},line={error.get('line_number', 1)}::{error.get('issue_text', '')}")
+
+              # Summary
+              metrics = data.get('metrics', {})
+              total = metrics.get('_totals', {})
+              high = total.get('SEVERITY.HIGH', 0)
+              medium = total.get('SEVERITY.MEDIUM', 0)
+              low = total.get('SEVERITY.LOW', 0)
+
+              if high > 0:
+                  print(f"::error::🔴 Found {high} HIGH severity security issues!")
+              if medium > 0:
+                  print(f"::warning::🟡 Found {medium} MEDIUM severity security issues")
+              if low > 0:
+                  print(f"::notice::🟢 Found {low} LOW severity security issues")
+          EOF
+          fi
+
+          echo "📚 Security best practices: https://bandit.readthedocs.io/en/latest/plugins/"
+
+      - name: 🔍 Check dependency vulnerabilities
+        run: |
+          echo "🔍 Checking for known vulnerabilities in dependencies"
+          echo "===================================================="
+
+          # Run safety check
+          if [ -f "requirements.txt" ]; then
+            safety check --json --file requirements.txt || true
+          fi
+
+          # Run pip-audit
+          pip-audit || true
+
+      - name: 📤 Upload security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: |
+            bandit-report.json
+            bandit-report.txt
+          if-no-files-found: ignore
+
+  # =============================================================================
+  # JOB: Code Complexity Analysis
+  # =============================================================================
+  complexity:
+    name: 📊 Complexity Analysis
+    runs-on: ubuntu-latest
+    needs: setup
+    if: contains(needs.setup.outputs.tools_to_run, 'complexity') || contains(needs.setup.outputs.tools_to_run, 'all')
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 📦 Install complexity analysis tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            radon \
+            mccabe \
+            cognitive-complexity \
+            vulture \
+            xenon
+
+      - name: 📊 Analyze Cyclomatic Complexity
+        run: |
+          echo "📊 Cyclomatic Complexity Analysis"
+          echo "================================="
+
+          # Run radon for complexity metrics
+          echo "📈 Complexity by file:"
+          radon cc . -s -a --show-complexity --total-average || true
+
+          # Create threshold based on quality level
+          QUALITY_LEVEL="${{ needs.setup.outputs.quality_level }}"
+          case $QUALITY_LEVEL in
+            starter)
+              THRESHOLD="C"  # Allow up to moderate complexity
+              ;;
+            standard)
+              THRESHOLD="B"  # Allow up to low-moderate complexity
+              ;;
+            strict|enterprise)
+              THRESHOLD="A"  # Only allow low complexity
+              ;;
+            *)
+              THRESHOLD="B"
+              ;;
+          esac
+
+          # Check against threshold
+          echo ""
+          echo "🎯 Checking complexity threshold (max: $THRESHOLD)..."
+          xenon . --max-absolute $THRESHOLD --max-modules $THRESHOLD --max-average $THRESHOLD || COMPLEXITY_FAILED=true
+
+          if [ "$COMPLEXITY_FAILED" == "true" ]; then
+            echo "::warning::⚠️ Some functions exceed complexity threshold!"
+            echo "💡 Tips to reduce complexity:"
+            echo "  • Extract complex conditionals into separate functions"
+            echo "  • Use early returns to reduce nesting"
+            echo "  • Consider using dictionary dispatch instead of long if-else chains"
+            echo "📚 Learn about cyclomatic complexity: https://radon.readthedocs.io/en/latest/intro.html"
+          fi
+
+      - name: 📊 Analyze Maintainability Index
+        run: |
+          echo "📊 Maintainability Index"
+          echo "======================="
+
+          radon mi . -s || true
+
+          echo ""
+          echo "📖 Maintainability Index Scale:"
+          echo "  • A (100-20): Very High - Easy to maintain"
+          echo "  • B (19-10): High - Reasonably maintainable"
+          echo "  • C (9-0): Moderate - Requires effort to maintain"
+          echo "  • Below 0: Low - Difficult to maintain"
+
+      - name: 📊 Analyze Code Metrics
+        run: |
+          echo "📊 Halstead Complexity Metrics"
+          echo "============================="
+
+          radon hal . -s || true
+
+          echo ""
+          echo "📊 Raw Metrics"
+          echo "============="
+          radon raw . -s || true
+
+      - name: 🦴 Find Dead Code
+        run: |
+          echo "🦴 Dead Code Detection"
+          echo "====================="
+
+          vulture . --min-confidence 80 || true
+
+          echo ""
+          echo "💡 Dead code impacts maintainability and can confuse developers."
+          echo "📚 Consider removing unused code or marking it with '# pragma: no cover' if intentionally unused."
+
+  # =============================================================================
+  # JOB: Documentation Quality
+  # =============================================================================
+  documentation:
+    name: 📚 Documentation Quality
+    runs-on: ubuntu-latest
+    needs: setup
+    if: |
+      (needs.setup.outputs.quality_level == 'strict' || needs.setup.outputs.quality_level == 'enterprise') &&
+      (contains(needs.setup.outputs.tools_to_run, 'docs') || contains(needs.setup.outputs.tools_to_run, 'all'))
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.DEFAULT_PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: 📦 Install documentation tools
+        run: |
+          python -m pip install --upgrade pip
+          pip install \
+            pydocstyle \
+            interrogate \
+            docstr-coverage
+
+      - name: 📝 Check docstring style
+        run: |
+          echo "📝 Docstring Style Check (PEP 257)"
+          echo "=================================="
+
+          # Configure based on quality level
+          if [ ! -f ".pydocstyle" ]; then
+            cat > .pydocstyle << EOF
+          [pydocstyle]
+          inherit = false
+          convention = google
+          match-dir = (?!test|tests|venv|.venv).*
+          add-ignore = D100,D104
+          EOF
+          fi
+
+          pydocstyle . || true
+
+          echo ""
+          echo "📚 Docstring conventions: https://www.python.org/dev/peps/pep-0257/"
+          echo "📖 Google style guide: https://google.github.io/styleguide/pyguide.html#38-comments-and-docstrings"
+
+      - name: 📊 Check documentation coverage
+        run: |
+          echo "📊 Documentation Coverage Report"
+          echo "==============================="
+
+          # Run interrogate for detailed coverage
+          interrogate . --verbose --quiet --fail-under 50 --exclude test --exclude tests --exclude venv --exclude .venv --generate-badge docs-badge.svg || true
+
+          echo ""
+          # Run docstr-coverage for different perspective
+          docstr-coverage . --skip-private --skip-magic --badge=docs-coverage.svg || true
+
+          echo ""
+          echo "💡 Good documentation improves maintainability and onboarding!"
+          echo "📚 Writing good docstrings: https://realpython.com/documenting-python-code/"
+
+      - name: 📤 Upload documentation badges
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation-badges
+          path: |
+            docs-badge.svg
+            docs-coverage.svg
+          if-no-files-found: ignore
+
+  # =============================================================================
+  # JOB: Quality Report & Summary
+  # =============================================================================
+  quality-report:
+    name: 📊 Quality Report
+    runs-on: ubuntu-latest
+    needs: [setup, formatting, linting, type-checking, security, complexity, documentation]
+    if: always()
+
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v4
+
+      - name: 📥 Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: 📊 Generate Quality Summary
+        run: |
+          echo "# 📊 Code Quality Report" > quality-report.md
+          echo "" >> quality-report.md
+          echo "**Date:** $(date)" >> quality-report.md
+          echo "**Quality Level:** ${{ needs.setup.outputs.quality_level }}" >> quality-report.md
+          echo "**Project Type:** ${{ needs.setup.outputs.project_type }}" >> quality-report.md
+          echo "" >> quality-report.md
+
+          # Check job statuses
+          echo "## 📋 Check Results" >> quality-report.md
+          echo "" >> quality-report.md
+          echo "| Check | Status |" >> quality-report.md
+          echo "|-------|--------|" >> quality-report.md
+
+          # Add status for each job
+          for job in formatting linting type-checking security complexity documentation; do
+            STATUS="${{ needs[job].result }}"
+            if [ "$STATUS" == "success" ]; then
+              echo "| ${job^} | ✅ Passed |" >> quality-report.md
+            elif [ "$STATUS" == "failure" ]; then
+              echo "| ${job^} | ❌ Failed |" >> quality-report.md
+            elif [ "$STATUS" == "skipped" ]; then
+              echo "| ${job^} | ⏭️ Skipped |" >> quality-report.md
+            else
+              echo "| ${job^} | ⏸️ Not Run |" >> quality-report.md
+            fi
+          done
+
+          echo "" >> quality-report.md
+
+          # Add recommendations based on quality level
+          echo "## 💡 Recommendations" >> quality-report.md
+          echo "" >> quality-report.md
+
+          QUALITY_LEVEL="${{ needs.setup.outputs.quality_level }}"
+          case $QUALITY_LEVEL in
+            starter)
+              cat >> quality-report.md << EOF
+          Your project is using **Starter** quality checks. Consider upgrading to **Standard** level when:
+          - The team is comfortable with basic formatting rules
+          - You want to catch more potential bugs
+          - You're ready to add type hints
+
+          Next steps:
+          1. Ensure all formatting checks pass consistently
+          2. Start adding type hints to new functions
+          3. Address any high-severity linting issues
+          EOF
+              ;;
+            standard)
+              cat >> quality-report.md << EOF
+          Your project is using **Standard** quality checks. Consider upgrading to **Strict** level when:
+          - Code coverage is consistently above 80%
+          - All type checking passes without ignores
+          - Complexity metrics are under control
+
+          Next steps:
+          1. Increase type hint coverage
+          2. Reduce cyclomatic complexity in hot spots
+          3. Improve documentation coverage
+          EOF
+              ;;
+            strict)
+              cat >> quality-report.md << EOF
+          Your project is using **Strict** quality checks. Great job maintaining high standards!
+
+          To maintain quality:
+          1. Keep complexity metrics low
+          2. Maintain high documentation coverage
+          3. Regular security audits
+          4. Consider upgrading to **Enterprise** for additional compliance checks
+          EOF
+              ;;
+            enterprise)
+              cat >> quality-report.md << EOF
+          Your project is using **Enterprise** quality checks with maximum strictness.
+
+          Maintaining enterprise standards:
+          1. Regular security vulnerability scans
+          2. Compliance with industry standards
+          3. Comprehensive documentation
+          4. Performance profiling
+          5. Accessibility compliance
+          EOF
+              ;;
+          esac
+
+          echo "" >> quality-report.md
+          echo "## 📚 Learning Resources" >> quality-report.md
+          echo "" >> quality-report.md
+          echo "- [Python Style Guide (PEP 8)](https://peps.python.org/pep-0008/)" >> quality-report.md
+          echo "- [Type Hints (PEP 484)](https://peps.python.org/pep-0484/)" >> quality-report.md
+          echo "- [Docstring Conventions (PEP 257)](https://peps.python.org/pep-0257/)" >> quality-report.md
+          echo "- [Python Security Best Practices](https://python.readthedocs.io/en/latest/library/security_warnings.html)" >> quality-report.md
+          echo "- [Refactoring for Lower Complexity](https://refactoring.guru/refactoring/techniques)" >> quality-report.md
+
+          # Display report
+          cat quality-report.md
+
+      - name: 📤 Upload Quality Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-report
+          path: quality-report.md
+
+      - name: 💬 Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const fs = require('fs');
+            const report = fs.readFileSync('quality-report.md', 'utf8');
+
+            // Find existing comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('📊 Code Quality Report')
+            );
+
+            const body = `${report}\n\n---\n*Updated: ${new Date().toISOString()}*`;
+
+            if (botComment) {
+              // Update existing comment
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              // Create new comment
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+      - name: 🏆 Set Quality Gate Status
+        run: |
+          # Determine if quality gate passed
+          GATE_PASSED=true
+
+          # Check critical jobs based on quality level
+          QUALITY_LEVEL="${{ needs.setup.outputs.quality_level }}"
+
+          case $QUALITY_LEVEL in
+            starter)
+              # Only formatting is critical for starter
+              if [ "${{ needs.formatting.result }}" != "success" ]; then
+                GATE_PASSED=false
+              fi
+              ;;
+            standard)
+              # Formatting and basic linting are critical
+              if [ "${{ needs.formatting.result }}" != "success" ] || \
+                 [ "${{ needs.linting.result }}" != "success" ]; then
+                GATE_PASSED=false
+              fi
+              ;;
+            strict|enterprise)
+              # All checks except documentation are critical
+              if [ "${{ needs.formatting.result }}" != "success" ] || \
+                 [ "${{ needs.linting.result }}" != "success" ] || \
+                 [ "${{ needs.type-checking.result }}" != "success" ] || \
+                 [ "${{ needs.complexity.result }}" != "success" ]; then
+                GATE_PASSED=false
+              fi
+              ;;
+          esac
+
+          if [ "$GATE_PASSED" == "true" ]; then
+            echo "::notice::🎉 Quality gate PASSED! Your code meets the $QUALITY_LEVEL standards."
+            exit 0
+          else
+            echo "::error::❌ Quality gate FAILED. Please address the issues above."
+            exit 1
+          fi
+
+# =============================================================================
+# Workflow Configuration Notes
+# =============================================================================
+#
+# This workflow is designed to be educational and progressive. Teams can start
+# with 'starter' level and gradually increase strictness as they improve.
+#
+# To customize for your project:
+# 1. Set DEFAULT_QUALITY_LEVEL in env section
+# 2. Create project-specific configs (pyproject.toml, .flake8, etc.)
+# 3. Adjust tool versions in env section
+# 4. Modify matrix strategies for Python versions
+# 5. Add project-specific tools or checks
+#
+# For mono-repo usage:
+# - Use path filters to run only on changed packages
+# - Set package-specific quality levels in .github/code-quality.json
+# - Use different configs per package via pyproject.toml
+#
+# Performance tips:
+# - Use path filtering to skip unchanged code
+# - Enable caching for faster subsequent runs
+# - Run expensive checks only on schedule
+# - Use fail-fast: false for matrix jobs to see all results
+#
+# =============================================================================
