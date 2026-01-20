@@ -20,6 +20,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Make entrypoint executable
+RUN chmod +x /app/scripts/entrypoint.sh
+
 # Expose Streamlit port
 EXPOSE 8501
 
@@ -27,5 +30,5 @@ EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl --fail http://localhost:8501/_stcore/health || exit 1
 
-# Run Streamlit
-CMD ["streamlit", "run", "main.py", "--server.address=0.0.0.0", "--server.port=8501"]
+# Run entrypoint script (initializes DB if needed, then starts Streamlit)
+ENTRYPOINT ["/app/scripts/entrypoint.sh"]

@@ -7,9 +7,14 @@ Usage:
     python scripts/init_db.py           # Initialize if not exists
     python scripts/init_db.py --reset   # Drop and recreate all tables
     python scripts/init_db.py --seed-sample  # Add sample test data
+
+Environment Variables (override CLI args):
+    DATABASE_HOST, DATABASE_PORT, DATABASE_NAME, DATABASE_USER, DATABASE_PASSWORD
+    ADMIN_USERNAME, ADMIN_PASSWORD  # For initial admin user
 """
 import argparse
 import logging
+import os
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -53,23 +58,41 @@ def reset_database(db: HACCPDatabase):
             logger.warning(f"Could not drop table {table}: {e}")
 
 
+def check_database_initialized(db: HACCPDatabase) -> bool:
+    """Check if the database has been initialized (users table exists with data)."""
+    try:
+        result = db.fetch_one("SELECT COUNT(*) as cnt FROM users")
+        return result is not None and result["cnt"] > 0
+    except Exception:
+        return False
+
+
 def create_default_admin(db: HACCPDatabase):
-    """Create default admin user if not exists."""
+    """Create default admin user if not exists.
+
+    Uses environment variables if set:
+        ADMIN_USERNAME (default: admin)
+        ADMIN_PASSWORD (default: admin)
+    """
     user_repo = UserRepository(db)
 
+    # Get admin credentials from environment or use defaults
+    admin_username = os.environ.get("ADMIN_USERNAME", "admin")
+    admin_password = os.environ.get("ADMIN_PASSWORD", "admin")
+
     # Check if admin already exists
-    existing = user_repo.get_by_username("admin")
+    existing = user_repo.get_by_username(admin_username)
     if existing:
-        logger.info("Admin user already exists")
+        logger.info(f"Admin user '{admin_username}' already exists")
         return
 
-    # Create admin user with password 'admin'
-    password_hash, password_salt = hash_password("admin")
+    # Create admin user
+    password_hash, password_salt = hash_password(admin_password)
 
     from auth.models import User
 
     admin = User(
-        username="admin",
+        username=admin_username,
         password_hash=password_hash,
         password_salt=password_salt,
         role="admin",
@@ -78,8 +101,9 @@ def create_default_admin(db: HACCPDatabase):
     )
 
     user_id = user_repo.insert(admin)
-    logger.info(f"Created admin user (id={user_id}) with password 'admin'")
-    logger.warning("IMPORTANT: Change the default admin password after first login!")
+    logger.info(f"Created admin user '{admin_username}' (id={user_id})")
+    if admin_password == "admin":
+        logger.warning("IMPORTANT: Change the default admin password after first login!")
 
 
 def seed_sample_data(db: HACCPDatabase):
@@ -191,37 +215,44 @@ def main():
     parser.add_argument(
         "--host",
         type=str,
-        default="localhost",
-        help="PostgreSQL host (default: localhost)",
+        default=None,
+        help="PostgreSQL host (env: DATABASE_HOST, default: localhost)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=5432,
-        help="PostgreSQL port (default: 5432)",
+        default=None,
+        help="PostgreSQL port (env: DATABASE_PORT, default: 5432)",
     )
     parser.add_argument(
         "--database",
         type=str,
-        default="haccp",
-        help="Database name (default: haccp)",
+        default=None,
+        help="Database name (env: DATABASE_NAME, default: haccp)",
     )
     parser.add_argument(
         "--user",
         type=str,
-        default="postgres",
-        help="Database user (default: postgres)",
+        default=None,
+        help="Database user (env: DATABASE_USER, default: postgres)",
     )
     parser.add_argument(
         "--password",
         type=str,
-        default="postgres",
-        help="Database password (default: postgres)",
+        default=None,
+        help="Database password (env: DATABASE_PASSWORD, default: postgres)",
     )
 
     args = parser.parse_args()
 
-    logger.info(f"Connecting to PostgreSQL: {args.database}@{args.host}:{args.port}")
+    # Environment variables override CLI args, with fallback defaults
+    db_host = args.host or os.environ.get("DATABASE_HOST", "localhost")
+    db_port = args.port or int(os.environ.get("DATABASE_PORT", "5432"))
+    db_name = args.database or os.environ.get("DATABASE_NAME", "haccp")
+    db_user = args.user or os.environ.get("DATABASE_USER", "postgres")
+    db_password = args.password or os.environ.get("DATABASE_PASSWORD", "postgres")
+
+    logger.info(f"Connecting to PostgreSQL: {db_name}@{db_host}:{db_port}")
 
     # Reset if requested (before connecting with schema init)
     if args.reset:
@@ -229,11 +260,11 @@ def main():
         try:
             import psycopg2
             conn = psycopg2.connect(
-                host=args.host,
-                port=args.port,
-                database=args.database,
-                user=args.user,
-                password=args.password,
+                host=db_host,
+                port=db_port,
+                database=db_name,
+                user=db_user,
+                password=db_password,
             )
             conn.autocommit = True
             cursor = conn.cursor()
@@ -272,19 +303,23 @@ def main():
     # Initialize database (schema is auto-created)
     try:
         db = HACCPDatabase.get_instance(
-            host=args.host,
-            port=args.port,
-            database=args.database,
-            user=args.user,
-            password=args.password,
+            host=db_host,
+            port=db_port,
+            database=db_name,
+            user=db_user,
+            password=db_password,
         )
-        logger.info("Database initialized successfully")
+        logger.info("Database schema initialized successfully")
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         sys.exit(1)
 
-    # Create default admin
-    create_default_admin(db)
+    # Check if already initialized (has users)
+    if check_database_initialized(db) and not args.reset:
+        logger.info("Database already initialized, skipping admin creation")
+    else:
+        # Create default admin
+        create_default_admin(db)
 
     # Seed sample data if requested
     if args.seed_sample:

@@ -76,7 +76,11 @@ def validate_session(session_key: str, db) -> Optional[int]:
             return None
 
         user_id, expires_at = row["user_id"], row["expires_at"]
-        expires_dt = datetime.fromisoformat(expires_at)
+        # PostgreSQL returns datetime objects, handle both cases
+        if isinstance(expires_at, datetime):
+            expires_dt = expires_at
+        else:
+            expires_dt = datetime.fromisoformat(expires_at)
 
         if expires_dt < datetime.now():
             logger.info(f"Session expired for user {user_id}")

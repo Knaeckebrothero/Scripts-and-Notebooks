@@ -83,6 +83,6 @@ def render_data_table(df, title: str = None):
         st.subheader(title)
 
     if df is not None and not df.empty:
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
     else:
         st.info("Keine Einträge vorhanden.")

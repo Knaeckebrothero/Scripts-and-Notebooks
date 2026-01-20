@@ -3,6 +3,7 @@ Repository classes for HACCP database operations.
 Eliminates repetitive insert/select code with generic base + domain-specific queries.
 """
 import logging
+import warnings
 from datetime import date, datetime, timedelta
 from typing import TypeVar, Generic, Type, List, Optional, Callable
 import pandas as pd
@@ -96,7 +97,9 @@ class BaseRepository(Generic[T]):
         """Get results as pandas DataFrame."""
         if query is None:
             query = f"SELECT * FROM {self.table}"
-        return pd.read_sql_query(query, self.db.connection, params=params)
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message=".*pandas only supports SQLAlchemy.*")
+            return pd.read_sql_query(query, self.db.connection, params=params)
 
 
 class KitchenTemperatureRepo(BaseRepository[KitchenTemperature]):

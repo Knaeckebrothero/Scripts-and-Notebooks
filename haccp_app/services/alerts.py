@@ -49,8 +49,12 @@ class AlertService:
 
         for product in products:
             try:
-                expiry = date.fromisoformat(product.expiry_date)
-            except ValueError:
+                # PostgreSQL returns date objects directly
+                if isinstance(product.expiry_date, date):
+                    expiry = product.expiry_date
+                else:
+                    expiry = date.fromisoformat(product.expiry_date)
+            except (ValueError, TypeError):
                 continue
 
             days_until = (expiry - date.today()).days
@@ -98,10 +102,14 @@ class AlertService:
 
             if last_cleaning:
                 try:
-                    last_date = datetime.fromisoformat(
-                        last_cleaning.completed_at
-                    ).date()
-                except ValueError:
+                    # PostgreSQL returns datetime objects directly
+                    if isinstance(last_cleaning.completed_at, datetime):
+                        last_date = last_cleaning.completed_at.date()
+                    else:
+                        last_date = datetime.fromisoformat(
+                            last_cleaning.completed_at
+                        ).date()
+                except (ValueError, TypeError):
                     continue
 
                 days_since = (date.today() - last_date).days

@@ -147,7 +147,7 @@ def _render_create_user_form(user_repo: UserRepository):
                 help="Mindestens 8 Zeichen",
             )
 
-        submitted = st.form_submit_button("👤 Benutzer anlegen", use_container_width=True)
+        submitted = st.form_submit_button("👤 Benutzer anlegen", width="stretch")
 
         if submitted:
             _create_user(user_repo, username, display_name, role, manual_password)

@@ -103,7 +103,7 @@ def _render_guest_history(db: HACCPDatabase):
             df["abreise"] = pd.to_datetime(df["abreise"]).dt.date
             df["hund_mit"] = df["hund_mit"].apply(lambda x: "Ja" if x else "Nein")
             df.columns = ["Name", "Anreise", "Abreise", "Hund", "Notizen"]
-            st.dataframe(df, use_container_width=True)
+            st.dataframe(df, width="stretch")
         else:
             st.info("Keine Gästedaten vorhanden.")
 

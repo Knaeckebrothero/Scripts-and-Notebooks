@@ -103,7 +103,7 @@ def _render_housekeeping_history(db: HACCPDatabase):
         df["aufgaben"] = df["aufgaben"].apply(
             lambda x: ", ".join(json.loads(x)) if x else "-"
         )
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
     else:
         st.info("Keine Housekeeping-Einträge vorhanden.")
 

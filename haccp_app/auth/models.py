@@ -33,7 +33,7 @@ class User:
             "password_salt": self.password_salt,
             "role": self.role,
             "display_name": self.display_name,
-            "active": 1 if self.active else 0,
+            "active": self.active,
         }
 
     @classmethod
@@ -100,7 +100,7 @@ class LoginAttempt:
         return {
             "ip_address": self.ip_address,
             "username": self.username,
-            "success": 1 if self.success else 0,
+            "success": self.success,
         }
 
     @classmethod

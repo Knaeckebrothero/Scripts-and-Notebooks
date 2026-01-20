@@ -167,7 +167,7 @@ class HotelGuest:
             "name": self.name,
             "anreise": self.anreise,
             "abreise": self.abreise,
-            "hund_mit": 1 if self.hund_mit else 0,
+            "hund_mit": self.hund_mit,
             "notizen": self.notizen,
             "created_by": self.created_by,
         }

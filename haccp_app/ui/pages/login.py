@@ -46,7 +46,7 @@ def render_login_page(db: HACCPDatabase):
         password = st.text_input("Passwort", type="password")
         remember_me = st.checkbox("Angemeldet bleiben", value=False)
 
-        submitted = st.form_submit_button("Anmelden", use_container_width=True)
+        submitted = st.form_submit_button("Anmelden", width="stretch")
 
         if submitted:
             if not username or not password:

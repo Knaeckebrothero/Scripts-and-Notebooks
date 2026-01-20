@@ -106,7 +106,7 @@ def _render_temperature_section(db: HACCPDatabase):
     if not df.empty:
         df["timestamp"] = pd.to_datetime(df["timestamp"])
         df["location"] = df["location"].map({"fridge": "Kühlschrank", "freezer": "Gefrierschrank"})
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
     else:
         st.info("Noch keine Temperatur-Einträge vorhanden.")
 
@@ -193,7 +193,7 @@ def _render_open_products_section(db: HACCPDatabase):
             return [""] * len(row)
 
         styled_df = df[["product", "amount", "expiry_date"]].style.apply(highlight_expiry, axis=1)
-        st.dataframe(styled_df, use_container_width=True)
+        st.dataframe(styled_df, width="stretch")
 
         # Delete option
         with st.expander("Eintrag löschen"):
@@ -246,7 +246,7 @@ def _render_cleaning_section(db: HACCPDatabase, cleaning_schedule: dict):
         df["tasks"] = df["tasks"].apply(lambda x: ", ".join(json.loads(x)) if x else "-")
         df["completed_at"] = pd.to_datetime(df["completed_at"]).dt.strftime("%d.%m.%Y %H:%M")
         df["station"] = df["station"].apply(lambda s: cleaning_schedule.get(s, {}).get("label", s.title()))
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(df, width="stretch")
     else:
         st.info("Keine Reinigungs-Einträge vorhanden.")
 

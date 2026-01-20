@@ -26,12 +26,15 @@ services:
     ports:
       - "8501:8501"
     environment:
-      # These override haccp.ini settings
+      # Database connection
       DATABASE_HOST: postgres
       DATABASE_PORT: 5432
       DATABASE_NAME: ${POSTGRES_DB:-haccp}
       DATABASE_USER: ${POSTGRES_USER:-postgres}
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      # Initial admin user (only used on first startup if DB is empty)
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
     depends_on:
       postgres:
         condition: service_healthy

@@ -58,6 +58,17 @@ spec:
             secretKeyRef:
               name: haccp-secrets
               key: DATABASE_PASSWORD
+        # Initial admin user (only used on first startup if DB is empty)
+        - name: ADMIN_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: haccp-secrets
+              key: ADMIN_USERNAME
+        - name: ADMIN_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: haccp-secrets
+              key: ADMIN_PASSWORD
         livenessProbe:
           httpGet:
             path: /_stcore/health
