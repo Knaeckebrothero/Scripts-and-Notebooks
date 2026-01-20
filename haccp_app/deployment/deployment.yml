@@ -1,0 +1,85 @@
+# Deployment for the HACCP application
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haccp-app
+  namespace: haccp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: haccp-app
+  template:
+    metadata:
+      labels:
+        app: haccp-app
+    spec:
+      containers:
+      - name: haccp-app
+        image: ghcr.io/<YOUR_USERNAME>/haccp_app:latest
+        ports:
+        - containerPort: 8501
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        env:
+        # Streamlit configuration
+        - name: STREAMLIT_SERVER_ENABLE_CORS
+          value: "true"
+        - name: STREAMLIT_SERVER_HEADLESS
+          value: "true"
+        # Database configuration from secrets
+        - name: DATABASE_HOST
+          valueFrom:
+            secretKeyRef:
+              name: haccp-secrets
+              key: DATABASE_HOST
+        - name: DATABASE_PORT
+          valueFrom:
+            secretKeyRef:
+              name: haccp-secrets
+              key: DATABASE_PORT
+        - name: DATABASE_NAME
+          valueFrom:
+            secretKeyRef:
+              name: haccp-secrets
+              key: DATABASE_NAME
+        - name: DATABASE_USER
+          valueFrom:
+            secretKeyRef:
+              name: haccp-secrets
+              key: DATABASE_USER
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: haccp-secrets
+              key: DATABASE_PASSWORD
+        livenessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /_stcore/health
+            port: 8501
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haccp-app
+  namespace: haccp
+spec:
+  selector:
+    app: haccp-app
+  ports:
+    - protocol: TCP
+      port: 8501
+      targetPort: 8501
