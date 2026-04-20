@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: haccp
+  labels:
+    app.kubernetes.io/name: haccp
+    app.kubernetes.io/component: hospitality

@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: haccp-config
+  namespace: haccp
+data:
+  # HACCP thresholds
+  FRIDGE_TEMP_MIN: "0.0"
+  FRIDGE_TEMP_MAX: "7.0"
+  FREEZER_TEMP_MIN: "-25.0"
+  FREEZER_TEMP_MAX: "-18.0"
+  EXPIRY_WARN_DAYS: "3"
+
+  # Auth settings
+  SESSION_TIMEOUT_HOURS: "8"
+  MAX_LOGIN_ATTEMPTS: "5"
+  LOCKOUT_MINUTES: "15"
+
+  # Logging
+  LOG_LEVEL: "INFO"

@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haccp-app
+  namespace: haccp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: haccp-app
+  template:
+    metadata:
+      labels:
+        app: haccp-app
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z haccp-postgres 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 5
+              done
+              echo "PostgreSQL is ready"
+      containers:
+        - name: haccp
+          image: ghcr.io/<YOUR_USERNAME>/haccp:latest
+          ports:
+            - containerPort: 8501
+              name: http
+          env:
+            - name: DATABASE_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: haccp-secrets
+                  key: DATABASE_HOST
+            - name: DATABASE_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: haccp-secrets
+                  key: DATABASE_PORT
+            - name: DATABASE_NAME
+              valueFrom:
+                secretKeyRef:
+                  name: haccp-secrets
+                  key: DATABASE_NAME
+            - name: DATABASE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: haccp-secrets
+                  key: DATABASE_USER
+            - name: DATABASE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: haccp-secrets
+                  key: DATABASE_PASSWORD
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: haccp-secrets
+                  key: ADMIN_USERNAME
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: haccp-secrets
+                  key: ADMIN_PASSWORD
+          envFrom:
+            - configMapRef:
+                name: haccp-config
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

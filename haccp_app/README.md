@@ -18,7 +18,7 @@ A Streamlit web application for HACCP (Hazard Analysis Critical Control Points) 
 - Python 3.11+
 - PostgreSQL 14+ (or Podman/Docker to run it)
 
-## Installation
+## Quick Start (Local Development)
 
 1. Clone and install dependencies:
    ```bash
@@ -56,7 +56,23 @@ Change the password after first login.
 
 ## Configuration
 
-Database and logging settings are in `haccp.ini`:
+### Environment Variables (Container/Production)
+
+Environment variables take priority and are used for container deployments:
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_HOST` | PostgreSQL host | `localhost` |
+| `DATABASE_PORT` | PostgreSQL port | `5432` |
+| `DATABASE_NAME` | Database name | `haccp` |
+| `DATABASE_USER` | Database user | `postgres` |
+| `DATABASE_PASSWORD` | Database password | `postgres` |
+| `ADMIN_USERNAME` | Initial admin username | `admin` |
+| `ADMIN_PASSWORD` | Initial admin password | `admin` |
+
+### Configuration File (Local Development)
+
+For local development, settings are in `haccp.ini`:
 
 ```ini
 [APP]
@@ -70,9 +86,22 @@ port = 5432
 database = haccp
 user = postgres
 password = postgres
+
+[HACCP]
+fridge_temp_min = 0.0
+fridge_temp_max = 7.0
+freezer_temp_min = -25.0
+freezer_temp_max = -18.0
+expiry_warn_days = 3
+
+[AUTH]
+session_timeout_hours = 8
+max_login_attempts = 5
+lockout_minutes = 15
+cookie_duration_days = 7
 ```
 
-## Database Initialization Options
+## Database Initialization
 
 ```bash
 # Initialize with default settings
@@ -88,6 +117,36 @@ python scripts/init_db.py --seed-sample
 python scripts/init_db.py --host localhost --port 5432 --database haccp --user postgres --password postgres
 ```
 
+## Container Deployment
+
+### Build Image
+
+```bash
+podman build -t haccp-app:latest -f deployment/Dockerfile .
+```
+
+### Run with Podman Compose
+
+```bash
+cp .env.example .env
+# Edit .env with your settings
+podman-compose up -d
+```
+
+### Kubernetes Deployment
+
+Kubernetes manifests are in the `deployment/` directory, prefixed for apply order:
+
+```bash
+# Apply all manifests
+kubectl apply -f deployment/
+
+# Verify deployment
+kubectl get pods -n haccp
+```
+
+See `deployment/README.md` for detailed Kubernetes deployment instructions.
+
 ## Project Structure
 
 ```
@@ -100,7 +159,8 @@ haccp_app/
 ├── services/           # Business logic (alerts, reports)
 ├── ui/                 # Streamlit UI components and pages
 ├── utils/              # Logging, config utilities
-└── scripts/            # CLI tools
+├── scripts/            # CLI tools (init_db.py)
+└── deployment/         # Kubernetes manifests, Dockerfile
 ```
 
 ## License
