@@ -1,0 +1,183 @@
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llm-loadtest
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vpn-credentials
+  namespace: llm-loadtest
+type: Opaque
+stringData:
+  # Frankfurt UAS VPN credentials
+  # Replace with your actual IT account credentials
+  host: "vpngate.frankfurt-university.de"
+  port: "443"
+  realm: "pub-all"
+  username: "your-it-account"
+  password: "your-password"
+
+---
+# Optional: Mount the GEANT certificate chain
+# Download from: https://crt.sh/?d=2475254782
+# Then create with: kubectl create configmap geant-cert --from-file=geant_chain.pem -n llm-loadtest
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: geant-cert
+  namespace: llm-loadtest
+data:
+  # Placeholder - replace with actual certificate content or create via kubectl
+  geant_chain.pem: |
+    # Download the GEANT OV RSA CA 4 certificate chain and paste here
+    # Or create this configmap from file:
+    # kubectl create configmap geant-cert --from-file=geant_chain.pem -n llm-loadtest
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loadtest-config
+  namespace: llm-loadtest
+data:
+  ENDPOINTS: "llama-3.1-8b:http://10.18.2.105:9000,phi3-14b:http://10.18.2.105:9001,oss-20b:http://10.18.2.105:9002"
+  REQUESTS_PER_SECOND: "50"
+  STREAMING_RATIO: "0.7"
+  DURATION_HOURS: "72"
+  REQUEST_TIMEOUT: "120"
+  MAX_CONCURRENT_REQUESTS: "500"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: loadtest-data
+  namespace: llm-loadtest
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  # Uncomment and set storageClassName if needed
+  # storageClassName: standard
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-loadtest
+  namespace: llm-loadtest
+  labels:
+    app: llm-loadtest
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: llm-loadtest
+  template:
+    metadata:
+      labels:
+        app: llm-loadtest
+    spec:
+      # Required for VPN to work (ppp interface creation)
+      securityContext:
+        sysctls:
+          - name: net.ipv4.ping_group_range
+            value: "0 2147483647"
+      containers:
+        - name: loadtest
+          image: llm-loadtest:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8501
+              name: http
+          env:
+            - name: VPN_ENABLED
+              value: "true"
+            - name: VPN_HOST
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-credentials
+                  key: host
+            - name: VPN_PORT
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-credentials
+                  key: port
+            - name: VPN_REALM
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-credentials
+                  key: realm
+            - name: VPN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-credentials
+                  key: username
+            - name: VPN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: vpn-credentials
+                  key: password
+          envFrom:
+            - configMapRef:
+                name: loadtest-config
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: geant-cert
+              mountPath: /app/certs
+              readOnly: true
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "2000m"
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - SYS_PTRACE
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: loadtest-data
+        - name: geant-cert
+          configMap:
+            name: geant-cert
+            optional: true
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-loadtest
+  namespace: llm-loadtest
+spec:
+  type: NodePort
+  selector:
+    app: llm-loadtest
+  ports:
+    - port: 8501
+      targetPort: 8501
+      nodePort: 30851
+      name: http

@@ -1,0 +1,7 @@
+# Filled-in VPN configuration (contains credentials) — never commit.
+config
+*.conf
+!*.conf.example
+
+# Bind-mounted CA certs
+certs/

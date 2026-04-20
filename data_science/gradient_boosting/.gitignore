@@ -1,0 +1,9 @@
+.venv
+.env
+data
+archived
+dac/*
+*.csv
+*.xlsx
+*.xls
+dac.tar.gz

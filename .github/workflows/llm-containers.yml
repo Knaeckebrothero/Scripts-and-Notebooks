@@ -1,0 +1,101 @@
+name: llm-containers
+
+# Build and push vLLM inference container images to GHCR.
+#
+# Triggers:
+#   - push to main when files under llm_containers/ (or this workflow) change
+#   - manual workflow_dispatch (always builds all three)
+#
+# Images:
+#   ghcr.io/knaeckebrothero/gemma4-dense-vllm
+#   ghcr.io/knaeckebrothero/gemma4-moe-vllm
+#   ghcr.io/knaeckebrothero/qwen3-next-vllm
+#
+# Tags:
+#   - sha-<short>   always
+#   - latest        on push to main / dispatch from main
+#
+# Notes:
+#   - The vllm/vllm-openai base image is ~20 GB, so we free extra disk on the
+#     runner before building. Without this, the push layer can OOM-disk.
+#   - fail-fast=false lets unrelated container builds succeed if one breaks.
+#   - GHA cache is scoped per container so the three builds don't evict each
+#     other (10 GB repo cache budget is tight with a shared scope).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'llm_containers/gemma4-dense-vllm/**'
+      - 'llm_containers/gemma4-moe-vllm/**'
+      - 'llm_containers/qwen3-next-vllm/**'
+      - '.github/workflows/llm-containers.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAMESPACE: knaeckebrothero
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        container:
+          - gemma4-dense-vllm
+          - gemma4-moe-vllm
+          - qwen3-next-vllm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [registry."docker.io"]
+              mirrors = ["mirror.gcr.io"]
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAMESPACE }}/${{ matrix.container }}
+          tags: |
+            type=sha,format=short,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          context: ./llm_containers/${{ matrix.container }}
+          file: ./llm_containers/${{ matrix.container }}/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.container }},ignore-error=true
+          cache-to: type=gha,mode=min,scope=${{ matrix.container }},ignore-error=true
