@@ -74,6 +74,7 @@ class ConfigHandler:
             "session_timeout_hours": "8",
             "max_login_attempts": "5",
             "lockout_minutes": "15",
+            "cookie_duration_days": "7",
         }
 
         self.save()

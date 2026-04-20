@@ -13,6 +13,7 @@ from .session import (
     logout,
     is_authenticated,
     get_current_user,
+    restore_session_from_cookie,
 )
 from .access import (
     ROLES,
@@ -40,6 +41,7 @@ __all__ = [
     "logout",
     "is_authenticated",
     "get_current_user",
+    "restore_session_from_cookie",
     # Access control
     "ROLES",
     "has_feature",

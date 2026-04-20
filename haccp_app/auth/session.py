@@ -160,3 +160,46 @@ def get_current_user(db) -> Optional[User]:
     except Exception as e:
         logger.error(f"Error getting current user: {e}")
         return None
+
+
+def restore_session_from_cookie(cookie_session_key: str, db) -> bool:
+    """
+    Restore session state from a cookie-stored session key.
+
+    :param cookie_session_key: Session key stored in browser cookie
+    :param db: HACCPDatabase instance
+    :return: True if session was restored successfully
+    """
+    if not cookie_session_key:
+        return False
+
+    user_id = validate_session(cookie_session_key, db)
+    if not user_id:
+        return False
+
+    # Fetch user details to populate session state
+    try:
+        cursor = db.execute(
+            "SELECT * FROM users WHERE id = %s",
+            (user_id,),
+            commit=False,
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+
+        user = User.from_row(dict(row))
+        if not user.active:
+            return False
+
+        # Restore session state
+        st.session_state["session_key"] = cookie_session_key
+        st.session_state["user_id"] = user.id
+        st.session_state["user_role"] = user.role
+        st.session_state["user_display_name"] = user.display_name or user.username
+
+        logger.info(f"Session restored from cookie for user {user.username}")
+        return True
+    except Exception as e:
+        logger.error(f"Error restoring session from cookie: {e}")
+        return False

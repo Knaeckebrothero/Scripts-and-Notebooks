@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 import streamlit as st
+import extra_streamlit_components as stx
 
 from config import CLEANING_SCHEDULE
 from db import HACCPDatabase, get_db
@@ -18,7 +19,9 @@ from ui.pages import (
     render_login_page,
     render_admin_page,
 )
-from auth import is_authenticated, logout, get_allowed_pages
+from ui.pages.login import SESSION_COOKIE_NAME
+from auth import is_authenticated, logout, get_allowed_pages, restore_session_from_cookie
+from utils.config_handler import ConfigHandler
 
 # Configure logging
 logging.basicConfig(
@@ -82,7 +85,7 @@ def save_to_json(db: HACCPDatabase):
     st.success(f"Daten wurden nach **{export_path}** exportiert.")
 
 
-def handle_logout(db: HACCPDatabase):
+def handle_logout(db: HACCPDatabase, cookie_manager=None):
     """Handle user logout."""
     session_key = st.session_state.get("session_key")
     if session_key:
@@ -91,6 +94,10 @@ def handle_logout(db: HACCPDatabase):
     # Clear session state
     for key in ["session_key", "user_id", "user_role", "user_display_name"]:
         st.session_state.pop(key, None)
+
+    # Clear session cookie
+    if cookie_manager is not None:
+        cookie_manager.delete(SESSION_COOKIE_NAME)
 
     st.rerun()
 
@@ -107,10 +114,21 @@ def main():
     # Initialize
     init_session_state()
     db = get_db()
+    cookie_manager = stx.CookieManager()
+    config = ConfigHandler.get_instance()
+    cookie_duration_days = config.get_int("AUTH", "cookie_duration_days", 7)
+
+    # Try to restore session from cookie if not already authenticated
+    if not st.session_state.get("session_key"):
+        cookie_session_key = cookie_manager.get(SESSION_COOKIE_NAME)
+        if cookie_session_key:
+            if not restore_session_from_cookie(cookie_session_key, db):
+                # Invalid cookie - delete it
+                cookie_manager.delete(SESSION_COOKIE_NAME)
 
     # Check authentication
     if not is_authenticated(db):
-        render_login_page(db)
+        render_login_page(db, cookie_manager, cookie_duration_days)
         return
 
     # Sidebar navigation
@@ -121,7 +139,7 @@ def main():
     st.sidebar.markdown(f"Angemeldet als: **{display_name}**")
 
     if st.sidebar.button("🚪 Abmelden"):
-        handle_logout(db)
+        handle_logout(db, cookie_manager)
 
     st.sidebar.markdown("---")
 

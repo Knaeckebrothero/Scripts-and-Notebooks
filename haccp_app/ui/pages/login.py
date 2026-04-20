@@ -2,6 +2,8 @@
 Login page for HACCP application.
 """
 import logging
+from datetime import datetime, timedelta
+from typing import Optional
 
 import streamlit as st
 
@@ -14,12 +16,21 @@ from db import UserRepository, LoginAttemptRepository, HACCPDatabase
 
 logger = logging.getLogger(__name__)
 
+# Cookie name constant
+SESSION_COOKIE_NAME = "haccp_session"
 
-def render_login_page(db: HACCPDatabase):
+
+def render_login_page(
+    db: HACCPDatabase,
+    cookie_manager=None,
+    cookie_duration_days: int = 7,
+):
     """
     Render the login page with authentication form.
 
     :param db: HACCPDatabase instance
+    :param cookie_manager: Optional CookieManager instance for persistent login
+    :param cookie_duration_days: Cookie duration in days (default 7)
     """
     st.title("Digitale HACCP-App")
     st.subheader("Anmeldung")
@@ -92,6 +103,16 @@ def render_login_page(db: HACCPDatabase):
             st.session_state["user_id"] = user.id
             st.session_state["user_role"] = user.role
             st.session_state["user_display_name"] = user.display_name or user.username
+
+            # Store session key in cookie for persistent login
+            if remember_me and cookie_manager is not None:
+                expires = datetime.now() + timedelta(days=cookie_duration_days)
+                cookie_manager.set(
+                    SESSION_COOKIE_NAME,
+                    session_key,
+                    expires_at=expires,
+                )
+                logger.info(f"Session cookie set for user {username}")
 
             logger.info(f"User {username} logged in from {ip_address}")
 
