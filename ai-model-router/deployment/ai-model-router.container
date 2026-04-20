@@ -1,0 +1,29 @@
+[Unit]
+Description=AI Model Router - OpenAI API-compatible gateway
+After=network.target
+
+[Container]
+ContainerName=ai-model-router
+Image=localhost/ai-model-router:latest
+Network=host
+
+# Volume mounts for persistent config
+Volume=%h/.config/ai-model-router/config.yaml:/app/config.yaml:ro
+
+# Environment variables
+Environment=ROUTER_PORT=8090
+Environment=ROUTER_CONFIG=/app/config.yaml
+
+# Health check
+HealthCheckCmd=/bin/sh -c "curl -f http://localhost:8090/health || exit 1"
+HealthCheckInterval=30s
+HealthCheckTimeout=10s
+HealthCheckStartPeriod=10s
+HealthCheckRetries=3
+
+# Resource limits
+Memory=2G
+CPUs=2
+
+[Install]
+WantedBy=multi-user.target

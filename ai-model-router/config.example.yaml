@@ -1,0 +1,125 @@
+# AI Model Router Configuration
+# OpenAI API-compatible gateway for deployed models
+
+# Server configuration
+server:
+  host: "0.0.0.0"
+  port: 8090
+
+# Rate limiting tiers
+tiers:
+  admin:
+    requests_per_minute: 1000
+    burst: 100
+    priority: 1
+    description: "Admin tier - high rate limit"
+  standard:
+    requests_per_minute: 100
+    burst: 20
+    description: "Standard production tier"
+  unlimited:
+    requests_per_minute: 999999
+    burst: 10000
+    priority: 0
+    description: "Unlimited usage - no rate limiting"
+  limited:
+    requests_per_minute: 20
+    burst: 5
+    description: "Limited/development tier"
+
+# API Keys with metadata
+api_keys:
+  - key: "sk-change-me-admin-key"
+    owner: "admin"
+    tier: "admin"
+    enabled: true
+    name: "Admin Key"
+  - key: "sk-change-me-standard-key"
+    owner: "engineering"
+    tier: "standard"
+    enabled: true
+    name: "Production Standard Key"
+
+# Model routing configuration
+routes:
+  # Embedding models
+  - name: "Qwen3-Embedding-8B"
+    type: "embedding"
+    backend: "http://127.0.0.1:8081"
+    endpoint: "/v1/embeddings"
+    backend_model_name: "Qwen/Qwen3-Embedding-8B"
+    models:
+      - "qwen3-embedding-8b"
+      - "qwen3-embedding-8b-base"
+    owned_by: "qwen"
+
+  - name: "Qwen3-Reranker-8B"
+    type: "reranker"
+    backend: "http://127.0.0.1:8082"
+    endpoint: "/v1/rerank"
+    backend_model_name: "Qwen/Qwen3-Reranker-8B"
+    models:
+      - "qwen3-reranker-8b"
+      - "qwen3-reranker-8b-base"
+    owned_by: "qwen"
+
+  - name: "Qwen3-Embedding-0.6B"
+    type: "embedding"
+    backend: "http://127.0.0.1:8083"
+    endpoint: "/v1/embeddings"
+    backend_model_name: "Qwen/Qwen3-Embedding-0.6B"
+    models:
+      - "qwen3-embedding-0.6b"
+      - "qwen3-embedding-0.6b-base"
+    owned_by: "qwen"
+
+  # Vision model
+  - name: "Pixtral-12B-2409"
+    type: "vision"
+    backend: "http://127.0.0.1:8086"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "mistralai/Pixtral-12B-2409"
+    models:
+      - "pixtral-12b-2409"
+      - "pixtral-12b"
+    owned_by: "mistralai"
+
+  # Chat model
+  - name: "GPT-OSS-20B"
+    type: "chat"
+    backend: "http://127.0.0.1:8085"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "openai/gpt-oss-20b"
+    models:
+      - "gpt-oss-20b"
+    owned_by: "openai"
+
+  # Speech-to-text
+  - name: "Whisper-large-v3-turbo"
+    type: "stt"
+    backend: "http://127.0.0.1:8087"
+    endpoint: "/v1/audio/transcriptions"
+    backend_model_name: "whisper-large-v3-turbo"
+    models:
+      - "whisper-large-v3-turbo"
+      - "whisper-large-v3"
+      - "whisper-1"
+    owned_by: "openai"
+
+  # Text-to-speech
+  - name: "Kokoro-82M"
+    type: "tts"
+    backend: "http://127.0.0.1:8880"
+    endpoint: "/v1/audio/speech"
+    backend_model_name: "kokoro-82m"
+    models:
+      - "kokoro-82M"
+      - "kokoro"
+      - "tts-1"
+    owned_by: "remsem"
+
+# Legacy rate limit config (deprecated - use tiers above)
+rate_limit:
+  enabled: false
+  requests_per_minute: 100
+  burst: 20

@@ -1,0 +1,10 @@
+[Unit]
+Description=AI Model Router persistent configuration volume
+
+[Volume]
+Driver=local
+DriverOpts=type=volume,opt=name=ai-model-router-config
+
+# Labels for management
+Label=app=ai-model-router
+Label=component=config

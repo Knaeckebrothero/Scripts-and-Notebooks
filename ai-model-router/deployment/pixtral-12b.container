@@ -1,0 +1,35 @@
+[Unit]
+Description=Pixtral-12B-2409 Vision Model vLLM Service
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+Image=docker.io/vllm/vllm-openai:latest
+Network=host
+Environment=VLLM_ATTENTION_BACKEND=FLASHINFER
+Environment=PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+# GPU 1 for vision model
+Device=nvidia.com/gpu=1
+# Port mapping: host 8086 -> container 8000
+PublishPort=8086:8000
+# Model configuration
+Volume=%h/.cache/vllm:/root/.cache/vllm
+# Run as llmprod user
+User=llmprod
+# Health check
+ExecStartPre=/bin/sh -c 'sleep 30'
+
+# Model serving arguments
+Arg=--model
+Arg=mistralai/Pixtral-12B-2409
+Arg=--dtype
+Arg=half
+Arg=--max-model-len
+Arg=32768
+Arg=--gpu-memory-utilization
+Arg=0.80
+Arg=--enforce-eager
+Arg=--trust-remote-code
+
+[Install]
+WantedBy=multi-user.target
