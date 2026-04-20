@@ -24,7 +24,7 @@
 #   - RTX 4090-24GB:      INT4 quant only, 32K ctx
 #   - H100/H200:          BF16 @ 256K ctx, FA3 backend
 
-FROM vllm/vllm-openai:v0.19.0
+FROM vllm/vllm-openai:v0.19.1
 
 ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive

@@ -26,7 +26,7 @@
 #   - RTX 4090-24GB:      use AWQ variant (QuantTrio/gemma-4-31B-it-AWQ, ~20 GB)
 #   - To run full BF16:   set MODEL=google/gemma-4-31B-it (requires A100-80GB+)
 
-FROM vllm/vllm-openai:v0.19.0
+FROM vllm/vllm-openai:v0.19.1
 
 ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive
