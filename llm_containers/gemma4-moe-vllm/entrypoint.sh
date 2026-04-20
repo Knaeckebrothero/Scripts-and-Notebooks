@@ -117,8 +117,15 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 # With only ~50 GB weights we can push utilization higher safely.
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 
-# No attention sinks on Gemma 4 — FP8 KV cache is safe and frees VRAM.
-KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8_e5m2}"
+# KV cache dtype — FP8 KV requires FA3 (Hopper+). On Ampere/Ada the FA2 kernel
+# rejects FP8 KV with Gemma 4's interleaved SWA, aborting engine startup. Auto
+# (= bf16) is safe everywhere; switch to fp8_e5m2 explicitly on Hopper+.
+if [ -z "${KV_CACHE_DTYPE}" ]; then
+    case "${GPU_ARCH}" in
+        hopper|blackwell) KV_CACHE_DTYPE="fp8_e5m2" ;;
+        *)                KV_CACHE_DTYPE="auto" ;;
+    esac
+fi
 
 # MoE with 4B active = high throughput potential; allow more concurrent seqs.
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-64}"

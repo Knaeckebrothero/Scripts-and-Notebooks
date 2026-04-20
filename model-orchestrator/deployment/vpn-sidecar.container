@@ -1,0 +1,48 @@
+[Unit]
+Description=VPN Sidecar - SOCKS5 proxy over FortiClient SSL VPN for model-orchestrator
+After=network-online.target
+Wants=network-online.target
+
+# Credentials file (not committed). Expected keys:
+#   VPN_HOST=vpn.example.com
+#   VPN_USER=your_username
+#   VPN_PASS=your_password
+#   VPN_TRUSTED_CERT=<64-char-sha256>         # or mount a CA file (see below)
+#   VPN_PORT=443                              # optional, defaults to 443
+#   VPN_REALM=pub-all                         # optional
+#   SOCKS_PORT=1080                           # optional, defaults to 1080
+#
+# Create the file (chmod 600) before starting:
+#   install -m 600 /dev/null %h/.config/model-orchestrator/vpn.env
+#   $EDITOR %h/.config/model-orchestrator/vpn.env
+
+[Container]
+ContainerName=vpn-sidecar
+Image=ghcr.io/knaeckebrothero/vpn-sidecar:latest
+
+# Private network namespace so ppp0 + VPN routes don't leak to the host.
+# SOCKS5 is exposed on the host via the PublishPort below.
+PublishPort=127.0.0.1:1080:1080
+
+# Required for openfortivpn to bring up ppp0 and install routes.
+AddCapability=NET_ADMIN
+AddDevice=/dev/ppp
+
+# VPN credentials (not committed to git).
+EnvironmentFile=%h/.config/model-orchestrator/vpn.env
+
+# Optional: mount a CA certificate file. The entrypoint auto-detects
+# /etc/vpn/certs/ca.crt and prefers it over VPN_TRUSTED_CERT.
+# Uncomment and point at your CA file if your gateway needs one:
+# Volume=%h/.config/model-orchestrator/ca.crt:/etc/vpn/certs/ca.crt:ro
+
+# Resource limits — sidecar is tiny (~15MB image).
+Memory=256M
+CPUs=0.5
+
+[Service]
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

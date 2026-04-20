@@ -1,0 +1,10 @@
+[Unit]
+Description=Model Orchestrator persistent configuration volume
+
+[Volume]
+Driver=local
+DriverOpts=type=volume,opt=name=model-orchestrator-config
+
+# Labels for management
+Label=app=model-orchestrator
+Label=component=config

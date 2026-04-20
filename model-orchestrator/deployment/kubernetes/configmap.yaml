@@ -1,0 +1,51 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: model-orchestrator-config
+  namespace: model-orchestrator
+  labels:
+    app.kubernetes.io/name: model-orchestrator
+data:
+  # Non-secret router configuration. API keys live in the Secret (see
+  # secret.yaml.example) and are merged at startup via ROUTER_KEYS_CONFIG.
+  #
+  # Replace the sample route/tier below with your real config. Full schema
+  # reference: ../../config.example.yaml
+  config.yaml: |
+    server:
+      host: "0.0.0.0"
+      port: 8090
+
+    tiers:
+      standard:
+        requests_per_minute: 100
+        burst: 20
+        description: "Standard production tier"
+      limited:
+        requests_per_minute: 20
+        burst: 5
+        description: "Limited/development tier"
+
+    routes:
+      # Example: a chat backend running as a Service in the same namespace.
+      # Replace with your actual backends (LLM, embedding, rerank, STT, TTS, ...).
+      - name: "example-chat"
+        type: "chat"
+        backend: "http://llama-server:80"
+        endpoint: "/v1/chat/completions"
+        backend_model_name: "openai/gpt-oss-20b"
+        models:
+          - "gpt-oss-20b"
+        owned_by: "openai"
+
+      # Example: a backend reachable only through the VPN sidecar (same pod,
+      # shared localhost). Requires the vpn sidecar container in deployment.yaml.
+      # - name: "internal-llm"
+      #   type: "chat"
+      #   backend: "http://llm-internal.corp.example:8000"
+      #   endpoint: "/v1/chat/completions"
+      #   backend_model_name: "internal-llm"
+      #   proxy: "socks5h://127.0.0.1:1080"
+      #   models:
+      #     - "internal-llm"
+      #   owned_by: "internal"

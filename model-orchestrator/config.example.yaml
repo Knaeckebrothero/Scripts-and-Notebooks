@@ -118,6 +118,48 @@ routes:
       - "tts-1"
     owned_by: "remsem"
 
+  # Example: load-balanced pool of backends
+  # ---------------------------------------
+  # `backend:` accepts either a single URL (shown above) or a list of URLs.
+  # With a list, the router round-robins requests across the pool. A backend
+  # that returns a 5xx or fails to connect is flagged unhealthy for
+  # ROUTER_UNHEALTHY_SECONDS (default 30s) and skipped during selection;
+  # non-streaming requests also get one retry against a different backend
+  # on the same failure. Streaming requests pick one backend with no retry.
+  #
+  # - name: "Chat-Pool"
+  #   type: "chat"
+  #   backend:
+  #     - "http://llm-1.internal:8000"
+  #     - "http://llm-2.internal:8000"
+  #   endpoint: "/v1/chat/completions"
+  #   backend_model_name: "openai/gpt-oss-20b"
+  #   models:
+  #     - "chat-pool"
+  #   owned_by: "openai"
+
+  # Example: route a backend through the VPN sidecar
+  # ------------------------------------------------
+  # Any route may set an optional `proxy:` field. When set, the router dials
+  # the backend through that proxy. Supported schemes:
+  #   - socks5h://host:port   (preferred — remote DNS resolution via the tunnel)
+  #   - socks5://host:port    (DNS resolved locally)
+  #   - http://host:port
+  #
+  # Deploy the vpn-sidecar Quadlet unit (see deployment/vpn-sidecar.container)
+  # and uncomment this block to expose an internal endpoint that only exists
+  # inside the VPN:
+  #
+  # - name: "Internal-LLM"
+  #   type: "chat"
+  #   backend: "http://llm-internal.corp.example:8000"
+  #   endpoint: "/v1/chat/completions"
+  #   backend_model_name: "internal-llm"
+  #   proxy: "socks5h://127.0.0.1:1080"
+  #   models:
+  #     - "internal-llm"
+  #   owned_by: "internal"
+
 # Legacy rate limit config (deprecated - use tiers above)
 rate_limit:
   enabled: false

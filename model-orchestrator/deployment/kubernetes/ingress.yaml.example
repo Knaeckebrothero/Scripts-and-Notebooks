@@ -1,0 +1,31 @@
+# Template — copy to ingress.yaml, replace host/tls-secret values, apply.
+# This pattern mirrors the homelab model-orchestrator ingress (Traefik +
+# cert-manager). For nginx-ingress or another controller, swap the
+# ingressClassName and annotations accordingly.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: model-orchestrator
+  namespace: model-orchestrator
+  labels:
+    app.kubernetes.io/name: model-orchestrator
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - ai.example.com
+      secretName: ai-example-com-tls
+  rules:
+    - host: ai.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: model-orchestrator
+                port:
+                  number: 8090

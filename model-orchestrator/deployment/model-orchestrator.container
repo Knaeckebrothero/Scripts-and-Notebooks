@@ -1,14 +1,14 @@
 [Unit]
-Description=AI Model Router - OpenAI API-compatible gateway
+Description=Model Orchestrator - OpenAI API-compatible gateway
 After=network.target
 
 [Container]
-ContainerName=ai-model-router
-Image=localhost/ai-model-router:latest
+ContainerName=model-orchestrator
+Image=localhost/model-orchestrator:latest
 Network=host
 
 # Volume mounts for persistent config
-Volume=%h/.config/ai-model-router/config.yaml:/app/config.yaml:ro
+Volume=%h/.config/model-orchestrator/config.yaml:/app/config.yaml:ro
 
 # Environment variables
 Environment=ROUTER_PORT=8090

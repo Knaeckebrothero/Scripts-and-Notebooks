@@ -30,9 +30,11 @@ RUN groupadd -r router && useradd -r -g router router
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy application files
+# Copy application files. `config.yaml` is gitignored (user-local), so we ship
+# the example as the default /app/config.yaml. The Quadlet unit (and the k8s
+# manifests) mount a real config over it at runtime.
 COPY main.py /app/main.py
-COPY config.yaml /app/config.yaml
+COPY config.example.yaml /app/config.yaml
 
 # Create directory for logs
 RUN mkdir -p /var/log/router && chown -R router:router /var/log/router

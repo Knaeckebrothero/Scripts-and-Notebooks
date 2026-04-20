@@ -1,0 +1,104 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-orchestrator
+  namespace: model-orchestrator
+  labels:
+    app.kubernetes.io/name: model-orchestrator
+spec:
+  # Pinned to 1: the rate limiter is in-memory, so >1 replica gives per-pod
+  # counters (effectively multiplying configured RPM by replica count).
+  # Revisit once a shared store lands (see roadmap.md).
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: model-orchestrator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: model-orchestrator
+    spec:
+      containers:
+        - name: router
+          image: ghcr.io/knaeckebrothero/model-orchestrator:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ROUTER_PORT
+              value: "8090"
+            - name: ROUTER_CONFIG
+              value: "/app/config.yaml"
+            - name: ROUTER_KEYS_CONFIG
+              value: "/app/keys.yaml"
+          ports:
+            - name: http
+              containerPort: 8090
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /app/config.yaml
+              subPath: config.yaml
+              readOnly: true
+            - name: keys
+              mountPath: /app/keys.yaml
+              subPath: keys.yaml
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+
+        # VPN sidecar — remove this container (and the /dev/ppp volume) if
+        # you don't have any routes that set `proxy: socks5h://...`.
+        # Shares the pod's network namespace with the router, so the router
+        # dials socks5h://127.0.0.1:1080.
+        - name: vpn-sidecar
+          image: ghcr.io/knaeckebrothero/vpn-sidecar:latest
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: model-orchestrator-vpn
+          securityContext:
+            capabilities:
+              add: ["NET_ADMIN"]
+          volumeMounts:
+            - name: dev-ppp
+              mountPath: /dev/ppp
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "500m"
+              memory: "256Mi"
+
+      volumes:
+        - name: config
+          configMap:
+            name: model-orchestrator-config
+        - name: keys
+          secret:
+            secretName: model-orchestrator-keys
+        - name: dev-ppp
+          hostPath:
+            path: /dev/ppp
+            type: CharDevice
+
+      terminationGracePeriodSeconds: 30

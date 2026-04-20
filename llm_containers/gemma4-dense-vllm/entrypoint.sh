@@ -130,10 +130,17 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 # Bump to 0.95 on H100/H200 or when using FP8 quants of the model.
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.92}"
 
-# KV cache — fp8_e5m2 is storage-only and works on Ampere (no FP8 TCs needed).
-# Safe for Gemma 4: no attention sinks, no known format-desync.
-# Use 'auto' (= bf16) if you want to rule out any quant artifacts.
-KV_CACHE_DTYPE="${KV_CACHE_DTYPE:-fp8_e5m2}"
+# KV cache dtype — FP8 KV requires FA3 (Hopper+). On Ampere/Ada the FA2 kernel
+# rejects FP8 KV when combined with Gemma 4's interleaved SWA layers, aborting
+# engine startup ("kv_cache_dtype not supported"). Default to bf16 on
+# Ampere/Ada, fp8_e5m2 on Hopper/Blackwell. Override explicitly if you know
+# your model+backend combo supports it.
+if [ -z "${KV_CACHE_DTYPE}" ]; then
+    case "${GPU_ARCH}" in
+        hopper|blackwell) KV_CACHE_DTYPE="fp8_e5m2" ;;
+        *)                KV_CACHE_DTYPE="auto" ;;
+    esac
+fi
 
 # Batching — Gemma 4 is a reasoning/multimodal generalist, so moderate batching.
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-32}"
