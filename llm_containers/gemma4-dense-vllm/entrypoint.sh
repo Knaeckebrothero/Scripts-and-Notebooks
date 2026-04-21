@@ -11,7 +11,9 @@
 # To run full-precision BF16 (~61 GB weights, A100-80GB+ only):
 #   MODEL=google/gemma-4-31B-it MAX_MODEL_LEN=65536
 #
-# Attention sinks: NO (standard GQA) — FA2 on Ampere, FA3 on Hopper.
+# Attention sinks: NO (standard GQA). head_dim=256 + interleaved SWA makes
+# FA2 on Ampere/Ada reject the config (head_size check in cuda.py:269), so
+# we default to TRITON_ATTN there. FA3 on Hopper/Blackwell handles it natively.
 # Interleaved 5:1 local-SWA + global attention handled by vLLM Hybrid KV Cache Manager.
 # FLASHINFER backend is NOT compatible (vLLM issue #20865).
 
@@ -66,9 +68,20 @@ detect_gpu_vram_gb() {
 GPU_VRAM_GB=$(detect_gpu_vram_gb)
 echo "Detected GPU VRAM: ${GPU_VRAM_GB} GB"
 
-# Gemma 4 uses standard GQA + interleaved SWA — FA2 handles it cleanly on all
-# supported GPUs. Do NOT use FLASHINFER (breaks interleaved SWA, vLLM #20865).
-ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND_OVERRIDE:-FLASH_ATTN}"
+# FA2 on Ampere/Ada (sm_80/sm_89) rejects Gemma 4's head_dim=256 combined
+# with interleaved SWA ("head_size not supported" in vllm/platforms/cuda.py
+# during layer init). Default to TRITON_ATTN there. FA3 on Hopper/Blackwell
+# handles head_dim=256 + SWA natively, so keep FLASH_ATTN on sm_90+.
+# Do NOT use FLASHINFER on any arch (breaks interleaved SWA, vLLM #20865).
+if [ -n "${VLLM_ATTENTION_BACKEND_OVERRIDE}" ]; then
+    ATTENTION_BACKEND="${VLLM_ATTENTION_BACKEND_OVERRIDE}"
+else
+    case "${GPU_ARCH}" in
+        ampere|ada)        ATTENTION_BACKEND="TRITON_ATTN" ;;
+        hopper|blackwell)  ATTENTION_BACKEND="FLASH_ATTN" ;;
+        *)                 ATTENTION_BACKEND="FLASH_ATTN" ;;
+    esac
+fi
 echo "Attention backend: ${ATTENTION_BACKEND}"
 
 # =============================================================================

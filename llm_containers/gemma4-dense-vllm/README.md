@@ -102,8 +102,12 @@ docker run --gpus all -p 8000:8000 --ipc=host \
   Gemma 4's interleaved SWA but with reduced prefix-cache efficiency vs a pure
   global-attention model. Hits still happen — just fewer than on dense Qwen /
   Llama. Track vLLM issues #3355, #14881, #20865.
-- **FLASHINFER is unsupported** for Gemma's interleaved SWA (issue #20865).
-  The entrypoint defaults to `FLASH_ATTN` — don't override to FLASHINFER.
+- **Attention backend by GPU**: entrypoint picks `TRITON_ATTN` on Ampere/Ada
+  — FA2 rejects Gemma 4's `head_dim=256` + interleaved SWA with
+  `head_size not supported` — and `FLASH_ATTN` (FA3) on Hopper/Blackwell.
+  FLASHINFER stays unsupported for Gemma's interleaved SWA (issue #20865) —
+  don't override to it. Override via `VLLM_ATTENTION_BACKEND_OVERRIDE` if
+  you know your stack supports a different backend.
 - **Tool parser is young**: the `gemma4` parser shipped in early April 2026.
   Watch for bugs like PR #38847 (`tools` kwarg) and issue #39468 (format).
   Pin to vLLM ≥ 0.19.0 which includes these fixes.

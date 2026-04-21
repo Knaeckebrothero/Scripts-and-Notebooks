@@ -16,8 +16,9 @@
 #     from PR #38847 and #39468 required for stable tool-calls).
 #   - Hybrid KV Cache Manager required for interleaved 5:1 local-SWA + global
 #     attention. FLASHINFER backend is NOT compatible (vLLM issue #20865).
-#   - Standard GQA (no attention sinks) — FA2 on Ampere, FA3 on Hopper. No
-#     Triton fallback penalty like gpt-oss.
+#   - Standard GQA (no attention sinks). head_dim=256 + interleaved SWA makes
+#     FA2 on Ampere/Ada reject the config (head_size check), so we default to
+#     TRITON_ATTN there. FA3 on Hopper/Blackwell handles it natively.
 #
 # GPU compatibility (at default FP8 / 128K context):
 #   - A100-80GB (sm_80):  fits comfortably, ~30 GB headroom for higher concurrency
