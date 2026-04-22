@@ -167,6 +167,25 @@ routes:
   #     - "internal-llm"
   #   owned_by: "internal"
 
+  # Example: backend that requires its own API key
+  # ------------------------------------------------
+  # If the upstream endpoint authenticates requests (e.g. a hosted
+  # third-party provider), point `backend_api_key_env` at an env var
+  # holding the key. The router will inject `Authorization: Bearer <key>`
+  # on outbound requests to this route only. The key is read once at
+  # startup; if the env var is unset the route still loads but logs a
+  # warning and sends requests without Authorization.
+  #
+  # - name: "Hosted-LLM"
+  #   type: "chat"
+  #   backend: "https://api.hosted-llm.example"
+  #   endpoint: "/v1/chat/completions"
+  #   backend_model_name: "hosted-llm-large"
+  #   backend_api_key_env: "HOSTED_LLM_API_KEY"
+  #   models:
+  #     - "hosted-llm"
+  #   owned_by: "hosted"
+
   # Example: backends across TWO distinct VPN networks
   # --------------------------------------------------
   # Deploy a second sidecar (deployment/vpn-sidecar-b.container on Quadlet,

@@ -187,8 +187,23 @@ def mark_unhealthy(backend_url: str) -> None:
 
 # Build model-to-route mapping. `backends` is always a list (the single
 # `backend:` string case is normalized on load).
+#
+# `backend_api_key_env` is optional: when a backend demands its own
+# Authorization (e.g. a hosted third-party endpoint), point it at an env
+# var holding the upstream key. Resolving at load time keeps the secret
+# out of both YAML and per-request paths, and lets us warn once if the
+# env var is missing rather than failing every request silently.
 MODEL_ROUTES: Dict[str, Dict[str, Any]] = {}
 for route in config.get('routes', []):
+    api_key_env = route.get('backend_api_key_env')
+    resolved_key: Optional[str] = None
+    if api_key_env:
+        resolved_key = os.environ.get(api_key_env) or None
+        if not resolved_key:
+            logger.warning(
+                f"Route '{route.get('name')}' references env var '{api_key_env}' "
+                f"but it is unset/empty; outbound requests will have no Authorization"
+            )
     for model_name in route.get('models', []):
         MODEL_ROUTES[model_name] = {
             'name': route.get('name', model_name),
@@ -197,6 +212,7 @@ for route in config.get('routes', []):
             'endpoint': route['endpoint'],
             'backend_model_name': route.get('backend_model_name', model_name),
             'proxy': route.get('proxy'),
+            'backend_api_key': resolved_key,
         }
 
 logger.info(f"Routes configured: {list(MODEL_ROUTES.keys())}")
@@ -370,9 +386,13 @@ async def proxy_request(
         "X-RateLimit-Reset": str(get_reset_time(api_key)),
     }
 
-    # Do NOT forward auth to backends (Bug 4 fix). Let httpx set Content-Type
-    # for file uploads; set it explicitly for JSON.
+    # Do NOT forward the client's auth to backends (Bug 4 fix). Let httpx set
+    # Content-Type for file uploads; set it explicitly for JSON. If the route
+    # declares its own upstream credential, inject that instead.
     headers = {} if files else {"Content-Type": "application/json"}
+    backend_api_key: Optional[str] = route.get('backend_api_key')
+    if backend_api_key:
+        headers["Authorization"] = f"Bearer {backend_api_key}"
 
     def _debug_preview(backend_url: str) -> None:
         if not logger.isEnabledFor(logging.DEBUG):
@@ -397,7 +417,7 @@ async def proxy_request(
             try:
                 async with client.stream(
                     method, backend_url, json=payload,
-                    headers={"Content-Type": "application/json"}, timeout=timeout,
+                    headers=headers, timeout=timeout,
                 ) as backend_response:
                     latency_ms = (time.time() - start_time) * 1000
                     record_metrics(api_key, model, latency_ms, backend_response.status_code != 200)

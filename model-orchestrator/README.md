@@ -35,10 +35,12 @@ See `roadmap.md` for planned work.
    `chat` route can't be called via `/v1/embeddings`).
 4. **Rewrite** — `model` is replaced with the route's
    `backend_model_name` before forwarding.
-5. **Forward** — the body is sent to `route.backend + route.endpoint`. If
-   the route declares a `proxy:`, the cached httpx client for that proxy is
-   used; otherwise the direct client. One cached client per distinct proxy
-   URL (connection pools stay warm).
+5. **Forward** — the body is sent to `route.backend + route.endpoint`. The
+   client's `Authorization` header is *not* forwarded; if the route declares
+   `backend_api_key_env`, the router injects its own `Authorization: Bearer
+   <value>` instead. If the route declares a `proxy:`, the cached httpx
+   client for that proxy is used; otherwise the direct client. One cached
+   client per distinct proxy URL (connection pools stay warm).
 6. **Respond** — non-streaming responses are passed through with
    rate-limit headers; streaming responses are piped line-by-line.
 
@@ -280,6 +282,7 @@ given model name (via its `models:` list) wins.
 | `owned_by` | string | Shown in `/v1/models` responses. |
 | `proxy` | string | Optional. HTTP/SOCKS proxy URL (`socks5h://host:port`) for all requests going to this backend. See *Routing backends through the VPN sidecar*. |
 | `health_path` | string \| null | Optional. Path used by the router's `/health` endpoint to probe this backend. Omit for the default (`/health`). Set to `null` to skip probing entirely — needed for backends that don't expose a health endpoint (e.g. Kokoro TTS, stock Whisper). |
+| `backend_api_key_env` | string | Optional. Name of an env var holding a credential for the upstream. When set, the router injects `Authorization: Bearer <value>` on outbound requests to this route (overriding the default behavior of forwarding no auth). Resolved once at startup; if the env var is unset the route still loads but logs a warning. Keys belong in env (Secret / Quadlet env file), never in the YAML. |
 
 ## Load balancing
 
