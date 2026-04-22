@@ -213,6 +213,20 @@ for api_key_entry in config.get('api_keys', []):
             'name': api_key_entry.get('name', 'Unnamed')
         }
 
+# Refuse to start with an empty key set unless the operator has explicitly
+# opted into anonymous access. `validate_api_key` treats an empty API_KEYS
+# dict as "auth disabled" so a forgotten/misrendered Secret would otherwise
+# silently expose the gateway.
+_ALLOW_ANON = os.environ.get("ROUTER_ALLOW_ANONYMOUS", "").lower() in ("1", "true", "yes")
+if not API_KEYS and not _ALLOW_ANON:
+    logger.error(
+        "No api_keys configured. Refusing to start: all requests would bypass auth. "
+        "Set ROUTER_ALLOW_ANONYMOUS=1 to explicitly allow this (dev only)."
+    )
+    sys.exit(1)
+if not API_KEYS and _ALLOW_ANON:
+    logger.warning("ROUTER_ALLOW_ANONYMOUS=1 — auth is disabled, all requests permitted")
+
 # Rate limiting
 TIER_CONFIG = config.get('tiers', {})
 rate_limit_tracker: Dict[str, list] = defaultdict(list)
@@ -569,21 +583,28 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 async def health_check():
     """Report per-backend reachability.
 
-    Probes every unique upstream URL across all routes (load-balanced
-    pools are expanded). Uses the route's proxy client when set so VPN-only
-    backends are probed through the tunnel. Status is "healthy" (/health
-    returned 200), "unhealthy" (non-200 response), or "unavailable"
-    (connection failed). Router itself always reports healthy.
+    Probes every unique upstream URL across all routes (load-balanced pools
+    are expanded). Uses the route's proxy client when set so VPN-only
+    backends are probed through the tunnel. Probe path is per-route via
+    ``health_path``: absent defaults to ``/health``; explicit ``null`` or
+    empty string skips probing (useful for backends like Kokoro TTS that
+    don't expose a health endpoint). Status values: ``healthy`` (200),
+    ``unhealthy`` (non-200), ``unavailable`` (connect/timeout), ``skipped``
+    (probing disabled). Router itself always reports healthy.
     """
     backend_status: Dict[str, str] = {}
     for route in config.get('routes', []):
         proxy = route.get('proxy')
+        probe_path = route['health_path'] if 'health_path' in route else '/health'
         for backend_url in _normalize_backends(route.get('backend', [])):
             if backend_url in backend_status:
                 continue
+            if not probe_path:
+                backend_status[backend_url] = "skipped"
+                continue
             try:
                 probe_client = get_client(proxy)
-                response = await probe_client.get(f"{backend_url}/health", timeout=5.0)
+                response = await probe_client.get(f"{backend_url}{probe_path}", timeout=5.0)
                 backend_status[backend_url] = "healthy" if response.status_code == 200 else "unhealthy"
             except Exception:
                 backend_status[backend_url] = "unavailable"

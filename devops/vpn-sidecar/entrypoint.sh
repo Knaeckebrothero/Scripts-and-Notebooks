@@ -9,6 +9,7 @@
 # =============================================================================
 
 SOCKS_PORT="${SOCKS_PORT:-1080}"
+HEALTH_PORT="${HEALTH_PORT:-8081}"
 VPN_CONFIG="${VPN_CONFIG:-/etc/openfortivpn/config}"
 
 # ── Generate config from env vars (overrides default/example config) ────────
@@ -53,11 +54,13 @@ fi
 MICROSOCKS_PID=""
 VPN_PID=""
 FORWARD_PID=""
+HEALTH_PID=""
 
 cleanup() {
     echo "[vpn] Shutting down..."
     [ -n "$VPN_PID" ] && kill "$VPN_PID" 2>/dev/null
     [ -n "$FORWARD_PID" ] && kill "$FORWARD_PID" 2>/dev/null
+    [ -n "$HEALTH_PID" ] && kill "$HEALTH_PID" 2>/dev/null
     [ -n "$MICROSOCKS_PID" ] && kill "$MICROSOCKS_PID" 2>/dev/null
     wait
     echo "[vpn] Stopped."
@@ -82,6 +85,21 @@ start_microsocks() {
 
 if ! start_microsocks; then
     exit 1
+fi
+
+# ── Start health endpoint ────────────────────────────────────────────────
+# One socat listener, fork-per-connection, each child execs /healthcheck.sh.
+# The script inspects ppp0 counters + SOCKS connection state to distinguish
+# healthy / idle / stale; see healthcheck.sh for the verdict table.
+echo "[vpn] Starting health endpoint on port ${HEALTH_PORT}..."
+socat TCP-LISTEN:${HEALTH_PORT},reuseaddr,fork SYSTEM:'/healthcheck.sh' &
+HEALTH_PID=$!
+sleep 1
+if ! kill -0 "$HEALTH_PID" 2>/dev/null; then
+    echo "[vpn] WARNING: health endpoint failed to start (continuing without liveness probe)"
+    HEALTH_PID=""
+else
+    echo "[vpn] Health endpoint running (PID ${HEALTH_PID})"
 fi
 
 # ── Start TCP forward (if configured) ────────────────────────────────────

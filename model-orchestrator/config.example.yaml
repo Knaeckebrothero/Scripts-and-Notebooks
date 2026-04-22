@@ -95,23 +95,30 @@ routes:
     owned_by: "openai"
 
   # Speech-to-text
+  # `health_path: null` disables /health probing for this backend — the
+  # default Whisper server image doesn't expose /health, so the router's
+  # own /health endpoint would falsely report "unavailable". Any route may
+  # opt out the same way; omit the field to use the default '/health', or
+  # set it to another path if the backend exposes health on a custom URL.
   - name: "Whisper-large-v3-turbo"
     type: "stt"
     backend: "http://127.0.0.1:8087"
     endpoint: "/v1/audio/transcriptions"
     backend_model_name: "whisper-large-v3-turbo"
+    health_path: null
     models:
       - "whisper-large-v3-turbo"
       - "whisper-large-v3"
       - "whisper-1"
     owned_by: "openai"
 
-  # Text-to-speech
+  # Text-to-speech — Kokoro also doesn't expose /health.
   - name: "Kokoro-82M"
     type: "tts"
     backend: "http://127.0.0.1:8880"
     endpoint: "/v1/audio/speech"
     backend_model_name: "kokoro-82m"
+    health_path: null
     models:
       - "kokoro-82M"
       - "kokoro"
@@ -159,6 +166,32 @@ routes:
   #   models:
   #     - "internal-llm"
   #   owned_by: "internal"
+
+  # Example: backends across TWO distinct VPN networks
+  # --------------------------------------------------
+  # Deploy a second sidecar (deployment/vpn-sidecar-b.container on Quadlet,
+  # or a second container in the k8s pod) listening on a different SOCKS
+  # port. Each route points at the tunnel it belongs to:
+  #
+  # - name: "Internal-LLM-Net-A"
+  #   type: "chat"
+  #   backend: "http://llm.corp-a.example:8000"
+  #   endpoint: "/v1/chat/completions"
+  #   backend_model_name: "internal-llm-a"
+  #   proxy: "socks5h://127.0.0.1:1080"
+  #   models:
+  #     - "internal-llm-a"
+  #   owned_by: "corp-a"
+  #
+  # - name: "Internal-LLM-Net-B"
+  #   type: "chat"
+  #   backend: "http://llm.corp-b.example:8000"
+  #   endpoint: "/v1/chat/completions"
+  #   backend_model_name: "internal-llm-b"
+  #   proxy: "socks5h://127.0.0.1:1081"
+  #   models:
+  #     - "internal-llm-b"
+  #   owned_by: "corp-b"
 
 # Legacy rate limit config (deprecated - use tiers above)
 rate_limit:

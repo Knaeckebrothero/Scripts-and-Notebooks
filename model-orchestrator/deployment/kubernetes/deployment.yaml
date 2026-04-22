@@ -81,6 +81,18 @@ spec:
           volumeMounts:
             - name: dev-ppp
               mountPath: /dev/ppp
+          # Liveness probe catches stale tunnels that openfortivpn itself fails
+          # to notice. /healthz compares ppp0 tx/rx deltas between probes — if
+          # we sent bytes in and got nothing back, it returns 503 and the
+          # kubelet restarts the container. See devops/vpn-sidecar/healthcheck.sh.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
           resources:
             requests:
               cpu: "50m"
@@ -88,6 +100,41 @@ spec:
             limits:
               cpu: "500m"
               memory: "256Mi"
+
+        # Second VPN sidecar — uncomment when you need backends from a
+        # distinct VPN network. Must listen on a different loopback port
+        # (set SOCKS_PORT=1081 inside model-orchestrator-vpn-b); routes
+        # then reference it via `proxy: socks5h://127.0.0.1:1081`.
+        #
+        # - name: vpn-sidecar-b
+        #   image: ghcr.io/knaeckebrothero/vpn-sidecar:latest
+        #   imagePullPolicy: IfNotPresent
+        #   envFrom:
+        #     - secretRef:
+        #         name: model-orchestrator-vpn-b
+        #   securityContext:
+        #     capabilities:
+        #       add: ["NET_ADMIN"]
+        #   volumeMounts:
+        #     - name: dev-ppp
+        #       mountPath: /dev/ppp
+        #   # Must use a distinct HEALTH_PORT (e.g. 8082) in model-orchestrator-vpn-b
+        #   # since both sidecars share the pod network namespace.
+        #   livenessProbe:
+        #     httpGet:
+        #       path: /healthz
+        #       port: 8082
+        #     initialDelaySeconds: 30
+        #     periodSeconds: 20
+        #     timeoutSeconds: 5
+        #     failureThreshold: 3
+        #   resources:
+        #     requests:
+        #       cpu: "50m"
+        #       memory: "64Mi"
+        #     limits:
+        #       cpu: "500m"
+        #       memory: "256Mi"
 
       volumes:
         - name: config

@@ -1,0 +1,53 @@
+[Unit]
+Description=VPN Sidecar B - second SOCKS5 proxy for a distinct VPN network
+After=network-online.target
+Wants=network-online.target
+
+# Sibling of vpn-sidecar.container. Drop this in when the orchestrator needs
+# backends from TWO separate VPN networks — each tunnel gets its own sidecar
+# on a distinct loopback port, and routes reference whichever applies:
+#
+#   # Network A (primary sidecar)
+#   proxy: "socks5h://127.0.0.1:1080"
+#
+#   # Network B (this sidecar)
+#   proxy: "socks5h://127.0.0.1:1081"
+#
+# Credentials go in a second env file (keys are identical to the primary):
+#   install -m 600 /dev/null %h/.config/model-orchestrator/vpn-b.env
+#   $EDITOR %h/.config/model-orchestrator/vpn-b.env
+#
+# Pre-startup checklist:
+#   - Set SOCKS_PORT=1081 inside vpn-b.env (the entrypoint reads it).
+#   - Set HEALTH_PORT=8082 inside vpn-b.env so its health endpoint doesn't
+#     collide with the primary sidecar's 8081 (Kubernetes pods share the
+#     network namespace between sidecars — rootful Podman does not, but
+#     keeping the ports distinct avoids surprises if that ever changes).
+#   - Ensure vpn.env for the primary sidecar keeps SOCKS_PORT=1080 (or unset)
+#     and HEALTH_PORT=8081 (or unset).
+#   - If you don't need a second tunnel, delete this file — it won't activate.
+
+[Container]
+ContainerName=vpn-sidecar-b
+Image=ghcr.io/knaeckebrothero/vpn-sidecar:latest
+
+# Distinct loopback port so both sidecars can coexist on the host.
+PublishPort=127.0.0.1:1081:1081
+
+AddCapability=NET_ADMIN
+AddDevice=/dev/ppp
+
+EnvironmentFile=%h/.config/model-orchestrator/vpn-b.env
+
+# Optional CA mount (see vpn-sidecar.container for notes).
+# Volume=%h/.config/model-orchestrator/ca-b.crt:/etc/vpn/certs/ca.crt:ro
+
+Memory=256M
+CPUs=0.5
+
+[Service]
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target

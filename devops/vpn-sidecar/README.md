@@ -52,6 +52,7 @@ The sidecar reads its openfortivpn config from `/etc/openfortivpn/config`. You c
 | `SOCKS_PORT` | no | `1080` | Port microsocks listens on |
 | `FORWARD_PORT` | no | — | If set, socat listens here and forwards to `FORWARD_TARGET` over the VPN |
 | `FORWARD_TARGET` | no | — | `host:port` target (only reachable inside the VPN) |
+| `HEALTH_PORT` | no | `8081` | Port the HTTP health endpoint listens on (any path returns the verdict) |
 
 If `VPN_TRUSTED_CERT` is not set, you can instead mount a CA file at `/etc/vpn/certs/ca.crt` — the entrypoint will pick it up automatically and prefer it over the hash.
 
@@ -144,7 +145,7 @@ services:
       VPN_TRUSTED_CERT: ${VPN_TRUSTED_CERT}
       SOCKS_PORT: 1080
     healthcheck:
-      test: ps aux | grep -q '[o]penfortivpn' && ps aux | grep -q '[m]icrosocks'
+      test: ["CMD-SHELL", "wget -qO- --timeout=3 http://127.0.0.1:8081/ | grep -q '^healthy:'"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -180,10 +181,45 @@ containers:
       - { name: VPN_TRUSTED_CERT, valueFrom: { secretKeyRef: { name: vpn, key: cert } } }
     volumeMounts:
       - { name: dev-ppp, mountPath: /dev/ppp }
+    livenessProbe:
+      httpGet: { path: /healthz, port: 8081 }
+      initialDelaySeconds: 30
+      periodSeconds: 20
+      failureThreshold: 3
 volumes:
   - name: dev-ppp
     hostPath: { path: /dev/ppp, type: CharDevice }
 ```
+
+---
+
+## Health checks
+
+The container serves an HTTP health endpoint on `HEALTH_PORT` (default `8081`, any path). It's designed to catch **stale tunnels** — situations where `openfortivpn` and `microsocks` are both running but traffic isn't actually flowing through `ppp0`. Those are exactly the cases that process-existence checks miss.
+
+The script at `/healthcheck.sh` reads `ppp0` tx/rx byte counters from `/sys/class/net/ppp0/statistics/` and compares against the previous probe. Verdicts:
+
+| Condition | Status | Body prefix |
+| --- | --- | --- |
+| `ppp0` missing or `openfortivpn`/`microsocks` dead | 503 | `unhealthy: ...` |
+| No active SOCKS connections and tx hasn't moved | 200 | `healthy: idle ...` |
+| tx and rx both increased | 200 | `healthy: flowing ...` |
+| tx increased but rx didn't | 503 | `unhealthy: tunnel stale ...` |
+
+The "idle" branch avoids false positives when nothing is using the proxy — there's no traffic to prove staleness against. As soon as real traffic resumes, the next probe catches a stuck tunnel within one interval.
+
+Recommended probe settings:
+
+```yaml
+livenessProbe:
+  httpGet: { path: /healthz, port: 8081 }
+  initialDelaySeconds: 30   # give openfortivpn time to bring ppp0 up
+  periodSeconds: 20         # probe cadence = staleness detection latency
+  timeoutSeconds: 5
+  failureThreshold: 3       # 3 x 20s = ~60s of bad traffic before restart
+```
+
+When the probe fails, Kubernetes restarts just the sidecar container — the rest of the pod keeps running, and the entrypoint's reconnect loop re-establishes the tunnel on the next start.
 
 ---
 

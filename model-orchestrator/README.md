@@ -139,7 +139,8 @@ or want the flexibility to add more later.
 
    Required keys: `VPN_HOST`, `VPN_USER`, `VPN_PASS`, `VPN_TRUSTED_CERT`
    (see the sidecar README for how to find the cert hash). Optional:
-   `VPN_PORT`, `VPN_REALM`, `SOCKS_PORT`.
+   `VPN_PORT`, `VPN_REALM`, `SOCKS_PORT`, `HEALTH_PORT` (defaults to
+   `8081`; see *Sidecar health checks* below).
 
 2. Install and start the sidecar Quadlet:
 
@@ -168,6 +169,37 @@ or want the flexibility to add more later.
 
 The router lazily creates one cached httpx client per distinct proxy URL on
 startup, so all routes sharing a proxy share a connection pool.
+
+#### Multiple tunnels (two or more VPN networks)
+
+Run one sidecar per network on distinct loopback ports and point each route
+at the tunnel it belongs to. Quadlet: the repo ships `vpn-sidecar.container`
+(port 1080) and a sibling `vpn-sidecar-b.container` (port 1081) — copy both
+into `~/.config/containers/systemd/`, create a second credentials file at
+`~/.config/model-orchestrator/vpn-b.env` with `SOCKS_PORT=1081` **and
+`HEALTH_PORT=8082`** set inside, and start both units. Kubernetes:
+uncomment the `vpn-sidecar-b` container block in
+`deployment/kubernetes/deployment.yaml` and create a second Secret
+(`model-orchestrator-vpn-b`) with `SOCKS_PORT=1081` and `HEALTH_PORT=8082`
+set. Routes then set `proxy: socks5h://127.0.0.1:1080` or `:1081` as
+appropriate. Connection pools stay separate per proxy URL, so the tunnels
+don't fight over keep-alive slots. Both sidecars share the pod's network
+namespace, so SOCKS *and* health ports must all be distinct.
+
+#### Sidecar health checks
+
+The sidecar exposes an HTTP health endpoint on `HEALTH_PORT` (default
+`8081`) that detects **stale tunnels** — cases where `openfortivpn` is
+still running but traffic silently stops flowing through `ppp0`. The
+endpoint compares tx/rx byte counters between probes: if bytes were sent
+in but nothing came back, it returns `503`. When idle it returns `200`
+(no traffic to test against, so no false positives).
+
+In Kubernetes the deployment wires this as a `livenessProbe` on the
+sidecar container — a failing probe restarts just that container while
+leaving the router running. See the
+[sidecar README](../devops/vpn-sidecar/README.md#health-checks) for the
+full verdict table and probe-tuning guidance.
 
 ### Pattern B — TCP forward
 
@@ -203,6 +235,7 @@ the schema.
 | `ROUTER_PORT` | `8090` | TCP port to listen on. Overrides `server.port` from the config. |
 | `ROUTER_LOG_LEVEL` | `INFO` | Log level for the `model-orchestrator` logger. Set to `DEBUG` to get request/response body previews. |
 | `ROUTER_UNHEALTHY_SECONDS` | `30` | How long a backend stays flagged unhealthy after a connection error or 5xx before being considered for round-robin again. |
+| `ROUTER_ALLOW_ANONYMOUS` | *(unset)* | Dev escape hatch. Set to `1` to start with no `api_keys:` configured. Without it the router refuses to boot on an empty key list, since empty = auth bypass. |
 
 ### Top-level YAML keys
 
@@ -246,6 +279,7 @@ given model name (via its `models:` list) wins.
 | `models` | list[string] | Client-visible model names this route claims. |
 | `owned_by` | string | Shown in `/v1/models` responses. |
 | `proxy` | string | Optional. HTTP/SOCKS proxy URL (`socks5h://host:port`) for all requests going to this backend. See *Routing backends through the VPN sidecar*. |
+| `health_path` | string \| null | Optional. Path used by the router's `/health` endpoint to probe this backend. Omit for the default (`/health`). Set to `null` to skip probing entirely — needed for backends that don't expose a health endpoint (e.g. Kokoro TTS, stock Whisper). |
 
 ## Load balancing
 

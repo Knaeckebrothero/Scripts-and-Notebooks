@@ -52,8 +52,9 @@ RUN echo "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing" >> /etc/a
 
 COPY --from=builder /build/microsocks/microsocks /usr/local/bin/microsocks
 COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh /usr/local/bin/microsocks
+COPY healthcheck.sh /healthcheck.sh
+RUN chmod +x /entrypoint.sh /healthcheck.sh /usr/local/bin/microsocks
 
-EXPOSE 1080
+EXPOSE 1080 8081
 
 ENTRYPOINT ["/entrypoint.sh"]

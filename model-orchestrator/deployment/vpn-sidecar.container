@@ -11,6 +11,10 @@ Wants=network-online.target
 #   VPN_PORT=443                              # optional, defaults to 443
 #   VPN_REALM=pub-all                         # optional
 #   SOCKS_PORT=1080                           # optional, defaults to 1080
+#   HEALTH_PORT=8081                          # optional, defaults to 8081
+#                                             # HTTP /healthz endpoint that
+#                                             # detects stale tunnels (see
+#                                             # devops/vpn-sidecar/README.md).
 #
 # Create the file (chmod 600) before starting:
 #   install -m 600 /dev/null %h/.config/model-orchestrator/vpn.env
