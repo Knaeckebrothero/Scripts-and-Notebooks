@@ -50,7 +50,6 @@ routes:
     backend_model_name: "Qwen/Qwen3-Embedding-8B"
     models:
       - "qwen3-embedding-8b"
-      - "qwen3-embedding-8b-base"
     owned_by: "qwen"
 
   - name: "Qwen3-Reranker-8B"
@@ -60,7 +59,6 @@ routes:
     backend_model_name: "Qwen/Qwen3-Reranker-8B"
     models:
       - "qwen3-reranker-8b"
-      - "qwen3-reranker-8b-base"
     owned_by: "qwen"
 
   - name: "Qwen3-Embedding-0.6B"
@@ -70,7 +68,6 @@ routes:
     backend_model_name: "Qwen/Qwen3-Embedding-0.6B"
     models:
       - "qwen3-embedding-0.6b"
-      - "qwen3-embedding-0.6b-base"
     owned_by: "qwen"
 
   # Vision model

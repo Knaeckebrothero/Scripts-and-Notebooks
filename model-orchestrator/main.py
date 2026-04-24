@@ -105,6 +105,7 @@ async def lifespan(app: FastAPI):
         f"Router started, {len(http_clients)} httpx client(s) initialized "
         f"(proxies: {sorted(unique_proxies) or 'none'})"
     )
+    await discover_upstream_models()
     yield
     for client in http_clients.values():
         await client.aclose()
@@ -213,9 +214,87 @@ for route in config.get('routes', []):
             'backend_model_name': route.get('backend_model_name', model_name),
             'proxy': route.get('proxy'),
             'backend_api_key': resolved_key,
+            'owned_by': route.get('owned_by', 'local'),
         }
 
 logger.info(f"Routes configured: {list(MODEL_ROUTES.keys())}")
+
+# Cache of upstream `/v1/models` entries keyed by `backend_model_name`. Filled
+# once at startup by `discover_upstream_models()`. Used to enrich the router's
+# own `/v1/models` response with real fields (max_model_len, permission, etc.)
+# instead of returning bare stubs. Empty for backends that don't expose
+# `/v1/models` (Kokoro, Whisper) — those keep the bare-stub behaviour.
+_upstream_model_cache: Dict[str, Dict[str, Any]] = {}
+
+# Fields we lift from the upstream entry. `id`/`object`/`owned_by`/`root`
+# stay router-controlled so aliases keep working; everything else is taken
+# verbatim from the backend.
+_UPSTREAM_PASSTHROUGH_FIELDS = (
+    "max_model_len",
+    "permission",
+    "created",
+)
+
+
+async def discover_upstream_models() -> None:
+    """Probe each route's backend for `/v1/models` and cache matching entries.
+
+    Best-effort: a backend that doesn't expose `/v1/models` (Kokoro TTS,
+    Whisper) or fails to respond just produces no cache entry, and the
+    `/v1/models` handler falls back to its bare-stub output for that route.
+    Probes only the first backend of each route — load-balanced pools are
+    assumed homogeneous.
+    """
+    for route in config.get('routes', []):
+        backends = _normalize_backends(route.get('backend', []))
+        if not backends:
+            continue
+        backend_model_name = route.get('backend_model_name')
+        if not backend_model_name:
+            continue
+        backend_url = f"{backends[0]}/v1/models"
+        client = get_client(route.get('proxy'))
+        try:
+            resp = await client.get(backend_url, timeout=5.0)
+            if resp.status_code != 200:
+                logger.debug(
+                    f"upstream /v1/models for {route.get('name')} "
+                    f"returned {resp.status_code}; skipping enrichment"
+                )
+                continue
+            data = resp.json().get('data', [])
+        except Exception as e:
+            logger.debug(
+                f"upstream /v1/models probe failed for {route.get('name')}: {e}"
+            )
+            continue
+        for entry in data:
+            if entry.get('id') == backend_model_name:
+                _upstream_model_cache[backend_model_name] = entry
+                logger.info(
+                    f"cached upstream metadata for {route.get('name')} "
+                    f"(backend_model_name={backend_model_name})"
+                )
+                break
+
+
+def _enriched_model_entry(model_id: str, route: Dict[str, Any]) -> Dict[str, Any]:
+    """Build a `/v1/models` entry, merging upstream metadata when available."""
+    entry: Dict[str, Any] = {
+        "id": model_id,
+        "object": "model",
+        "created": 1704067200,
+        "owned_by": route.get('owned_by', 'local'),
+        "permission": [],
+        "root": model_id,
+        "parent": None,
+    }
+    upstream = _upstream_model_cache.get(route.get('backend_model_name'))
+    if upstream:
+        for field in _UPSTREAM_PASSTHROUGH_FIELDS:
+            if field in upstream:
+                entry[field] = upstream[field]
+    return entry
 
 # API keys
 API_KEYS: Dict[str, Dict[str, Any]] = {}
@@ -433,9 +512,13 @@ async def proxy_request(
                         yield f"data: {json.dumps(err_body)}\n\n"
                         yield "data: [DONE]\n\n"
                         return
-                    async for line in backend_response.aiter_lines():
-                        if line:
-                            yield line + "\n"
+                    # Stream raw bytes through unchanged. aiter_lines() strips
+                    # newlines and drops blank lines, which destroys the \n\n
+                    # event terminators SSE requires — strict parsers (OpenAI
+                    # SDK) then buffer the whole stream and never decode it.
+                    async for chunk in backend_response.aiter_raw():
+                        if chunk:
+                            yield chunk
             except (httpx.ConnectError, httpx.TimeoutException) as e:
                 mark_unhealthy(backend_host)
                 record_metrics(api_key, model, 0, is_error=True)
@@ -674,20 +757,15 @@ async def get_metrics(req: Request):
 # OpenAI-compatible /v1/models endpoint
 @app.get("/v1/models")
 async def list_models():
-    """List available models - OpenAI compatible (no auth required)."""
-    models = []
-    for route in config.get('routes', []):
-        for model_name in route.get('models', []):
-            models.append({
-                "id": model_name,
-                "object": "model",
-                "created": 1704067200,
-                "owned_by": route.get('owned_by', 'local'),
-                "permission": [],
-                "root": model_name,
-                "parent": None
-            })
+    """List available models - OpenAI compatible (no auth required).
 
+    Each entry is enriched with upstream metadata (max_model_len, real
+    permission array, real created timestamp) when the backend exposes
+    `/v1/models` and we successfully cached it at startup.
+    """
+    models = []
+    for model_name, route in MODEL_ROUTES.items():
+        models.append(_enriched_model_entry(model_name, route))
     return {"object": "list", "data": models}
 
 @app.get("/v1/models/{model_id}")
@@ -695,16 +773,7 @@ async def get_model(model_id: str):
     """Get specific model info (no auth required)."""
     if model_id not in MODEL_ROUTES:
         raise HTTPException(status_code=404, detail="Model not found")
-
-    return {
-        "id": model_id,
-        "object": "model",
-        "created": 1704067200,
-        "owned_by": "local",
-        "permission": [],
-        "root": model_id,
-        "parent": None
-    }
+    return _enriched_model_entry(model_id, MODEL_ROUTES[model_id])
 
 # ============ ENDPOINTS WITH RAW BODY PASS-THROUGH ============
 
