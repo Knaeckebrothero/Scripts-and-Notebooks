@@ -1,5 +1,16 @@
 # AI Model Router Configuration
 # OpenAI API-compatible gateway for deployed models
+#
+# Each route's exposed model ids are the union of:
+#   1. its `models:` list (explicit aliases — the request payload's `model`
+#      is rewritten to `backend_model_name` before forwarding), and
+#   2. ids the backend reports via its own `/v1/models` (passthrough — the
+#      payload's `model` is forwarded unchanged).
+# Aliases win on collisions. Discovery refreshes every
+# ROUTER_DISCOVERY_INTERVAL seconds (default 300). Backends without
+# `/v1/models` (e.g. Kokoro, Whisper) only contribute their declared aliases.
+# `/v1/models` responses pass upstream metadata (max_model_len, permission,
+# created, root, parent, …) through verbatim when available.
 
 # Server configuration
 server:

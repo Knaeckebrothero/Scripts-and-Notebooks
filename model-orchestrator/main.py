@@ -10,10 +10,11 @@ import sys
 import json
 import time
 import uuid
+import asyncio
 import logging
 import yaml
 import httpx
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Tuple, Union
 from contextvars import ContextVar
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -105,11 +106,19 @@ async def lifespan(app: FastAPI):
         f"Router started, {len(http_clients)} httpx client(s) initialized "
         f"(proxies: {sorted(unique_proxies) or 'none'})"
     )
-    await discover_upstream_models()
-    yield
-    for client in http_clients.values():
-        await client.aclose()
-    logger.info("Router shutdown complete")
+    await discover_and_rebuild()
+    discovery_task = asyncio.create_task(_discovery_loop())
+    try:
+        yield
+    finally:
+        discovery_task.cancel()
+        try:
+            await discovery_task
+        except asyncio.CancelledError:
+            pass
+        for client in http_clients.values():
+            await client.aclose()
+        logger.info("Router shutdown complete")
 
 # ============ CONFIGURATION ============
 CONFIG_PATH = os.environ.get("ROUTER_CONFIG", "config.yaml")
@@ -186,115 +195,166 @@ def mark_unhealthy(backend_url: str) -> None:
     logger.warning(f"marked backend unhealthy for {UNHEALTHY_DURATION:.0f}s: {backend_url}")
 
 
-# Build model-to-route mapping. `backends` is always a list (the single
-# `backend:` string case is normalized on load).
-#
-# `backend_api_key_env` is optional: when a backend demands its own
-# Authorization (e.g. a hosted third-party endpoint), point it at an env
-# var holding the upstream key. Resolving at load time keeps the secret
-# out of both YAML and per-request paths, and lets us warn once if the
-# env var is missing rather than failing every request silently.
-MODEL_ROUTES: Dict[str, Dict[str, Any]] = {}
-for route in config.get('routes', []):
-    api_key_env = route.get('backend_api_key_env')
-    resolved_key: Optional[str] = None
-    if api_key_env:
-        resolved_key = os.environ.get(api_key_env) or None
-        if not resolved_key:
+# Pre-resolve any per-route backend API keys at load time so we warn once if
+# the env var is missing rather than failing every request silently.
+_route_api_keys: Dict[int, Optional[str]] = {}
+for _i, _route in enumerate(config.get('routes', [])):
+    _api_key_env = _route.get('backend_api_key_env')
+    if _api_key_env:
+        _resolved = os.environ.get(_api_key_env) or None
+        if not _resolved:
             logger.warning(
-                f"Route '{route.get('name')}' references env var '{api_key_env}' "
+                f"Route '{_route.get('name')}' references env var '{_api_key_env}' "
                 f"but it is unset/empty; outbound requests will have no Authorization"
             )
-    for model_name in route.get('models', []):
-        MODEL_ROUTES[model_name] = {
-            'name': route.get('name', model_name),
-            'backends': _normalize_backends(route.get('backend', [])),
-            'type': route['type'],
-            'endpoint': route['endpoint'],
-            'backend_model_name': route.get('backend_model_name', model_name),
-            'proxy': route.get('proxy'),
-            'backend_api_key': resolved_key,
-            'owned_by': route.get('owned_by', 'local'),
-        }
+        _route_api_keys[_i] = _resolved
+    else:
+        _route_api_keys[_i] = None
 
-logger.info(f"Routes configured: {list(MODEL_ROUTES.keys())}")
+# `MODEL_ROUTES` is rebuilt by `discover_and_rebuild()` from the union of
+#   1. configured aliases (`models:` list in each route — explicit, always
+#      present, request payload's `model` is rewritten to `backend_model_name`
+#      before forwarding), and
+#   2. IDs the backend reports via its own `/v1/models` (passthrough — the
+#      payload's `model` is left alone because it already matches what the
+#      backend serves).
+# Aliases win on collisions so explicit config beats discovery. Refresh runs
+# every `ROUTER_DISCOVERY_INTERVAL` seconds (default 300).
+MODEL_ROUTES: Dict[str, Dict[str, Any]] = {}
 
-# Cache of upstream `/v1/models` entries keyed by `backend_model_name`. Filled
-# once at startup by `discover_upstream_models()`. Used to enrich the router's
-# own `/v1/models` response with real fields (max_model_len, permission, etc.)
-# instead of returning bare stubs. Empty for backends that don't expose
-# `/v1/models` (Kokoro, Whisper) — those keep the bare-stub behaviour.
-_upstream_model_cache: Dict[str, Dict[str, Any]] = {}
-
-# Fields we lift from the upstream entry. `id`/`object`/`owned_by`/`root`
-# stay router-controlled so aliases keep working; everything else is taken
-# verbatim from the backend.
-_UPSTREAM_PASSTHROUGH_FIELDS = (
-    "max_model_len",
-    "permission",
-    "created",
-)
+REFRESH_INTERVAL = float(os.environ.get("ROUTER_DISCOVERY_INTERVAL", "300"))
 
 
-async def discover_upstream_models() -> None:
-    """Probe each route's backend for `/v1/models` and cache matching entries.
+async def _fetch_upstream_models(
+    backend: str, proxy: Optional[str], api_key: Optional[str]
+) -> List[Dict[str, Any]]:
+    """GET <backend>/v1/models, returning the `data:` list or [] on failure."""
+    client = get_client(proxy)
+    headers: Dict[str, str] = {}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        resp = await client.get(f"{backend}/v1/models", headers=headers, timeout=5.0)
+        if resp.status_code != 200:
+            logger.debug(
+                f"upstream /v1/models {backend} returned {resp.status_code}"
+            )
+            return []
+        return resp.json().get('data', []) or []
+    except Exception as e:
+        logger.debug(f"upstream /v1/models {backend} failed: {e}")
+        return []
 
-    Best-effort: a backend that doesn't expose `/v1/models` (Kokoro TTS,
-    Whisper) or fails to respond just produces no cache entry, and the
-    `/v1/models` handler falls back to its bare-stub output for that route.
-    Probes only the first backend of each route — load-balanced pools are
-    assumed homogeneous.
+
+async def discover_and_rebuild() -> None:
+    """Probe every route's backend `/v1/models`, then rebuild MODEL_ROUTES.
+
+    Each route contributes its configured `models:` aliases AND every model
+    id the backend reports via `/v1/models`. Aliases win on collisions, and
+    the alias path rewrites `model:` to `backend_model_name`; the discovery
+    path leaves `model:` alone (it already matches the backend's id).
+
+    Best-effort: a backend that doesn't expose `/v1/models` (Kokoro,
+    Whisper) just contributes no discovered ids — its aliases still work.
+    Probes the first backend in load-balanced pools (assumed homogeneous).
+    Each unique (backend, proxy, api_key) tuple is fetched once per cycle.
     """
-    for route in config.get('routes', []):
+    upstream_by_route: Dict[int, List[Dict[str, Any]]] = {}
+    fetch_cache: Dict[Tuple[str, Optional[str], Optional[str]], List[Dict[str, Any]]] = {}
+    for i, route in enumerate(config.get('routes', [])):
         backends = _normalize_backends(route.get('backend', []))
         if not backends:
+            upstream_by_route[i] = []
             continue
+        proxy = route.get('proxy')
+        api_key = _route_api_keys.get(i)
+        cache_key = (backends[0], proxy, api_key)
+        if cache_key not in fetch_cache:
+            fetch_cache[cache_key] = await _fetch_upstream_models(*cache_key)
+        upstream_by_route[i] = fetch_cache[cache_key]
+
+    new_routes: Dict[str, Dict[str, Any]] = {}
+    for i, route in enumerate(config.get('routes', [])):
+        backends = _normalize_backends(route.get('backend', []))
+        base = {
+            'name': route.get('name', ''),
+            'backends': backends,
+            'type': route['type'],
+            'endpoint': route['endpoint'],
+            'proxy': route.get('proxy'),
+            'backend_api_key': _route_api_keys.get(i),
+            'owned_by': route.get('owned_by'),
+        }
+        upstream_entries = upstream_by_route.get(i, [])
+        upstream_by_id: Dict[str, Dict[str, Any]] = {
+            u['id']: u for u in upstream_entries if u.get('id')
+        }
+
+        # 1. Configured aliases — request payload's `model` is rewritten to
+        #    backend_model_name before forwarding.
         backend_model_name = route.get('backend_model_name')
-        if not backend_model_name:
-            continue
-        backend_url = f"{backends[0]}/v1/models"
-        client = get_client(route.get('proxy'))
-        try:
-            resp = await client.get(backend_url, timeout=5.0)
-            if resp.status_code != 200:
-                logger.debug(
-                    f"upstream /v1/models for {route.get('name')} "
-                    f"returned {resp.status_code}; skipping enrichment"
-                )
+        for alias in route.get('models', []):
+            effective = backend_model_name or alias
+            entry = {
+                **base,
+                'effective_backend_name': effective,
+                '_upstream_meta': upstream_by_id.get(effective),
+            }
+            new_routes[alias] = entry
+
+        # 2. Discovered ids — passthrough, no rewrite. Skip ids already
+        #    claimed by an alias above (alias wins on collision).
+        for upstream_id, meta in upstream_by_id.items():
+            if upstream_id in new_routes:
                 continue
-            data = resp.json().get('data', [])
+            new_routes[upstream_id] = {
+                **base,
+                'effective_backend_name': upstream_id,
+                '_upstream_meta': meta,
+            }
+
+    global MODEL_ROUTES
+    MODEL_ROUTES = new_routes
+    logger.info(
+        f"routes rebuilt: {len(new_routes)} model id(s): {sorted(new_routes.keys())}"
+    )
+
+
+async def _discovery_loop() -> None:
+    """Re-run discovery every REFRESH_INTERVAL seconds until cancelled."""
+    while True:
+        try:
+            await asyncio.sleep(REFRESH_INTERVAL)
+            await discover_and_rebuild()
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.debug(
-                f"upstream /v1/models probe failed for {route.get('name')}: {e}"
-            )
-            continue
-        for entry in data:
-            if entry.get('id') == backend_model_name:
-                _upstream_model_cache[backend_model_name] = entry
-                logger.info(
-                    f"cached upstream metadata for {route.get('name')} "
-                    f"(backend_model_name={backend_model_name})"
-                )
-                break
+            logger.warning(f"periodic discovery refresh failed: {e}")
 
 
 def _enriched_model_entry(model_id: str, route: Dict[str, Any]) -> Dict[str, Any]:
-    """Build a `/v1/models` entry, merging upstream metadata when available."""
-    entry: Dict[str, Any] = {
+    """Build a `/v1/models` entry, passing the upstream entry through verbatim
+    when available. Router-controlled fields (`id`, optional `owned_by`)
+    override; everything else (max_model_len, permission, root, parent,
+    created, …) flows through unchanged.
+    """
+    upstream = route.get('_upstream_meta')
+    if upstream:
+        entry = dict(upstream)
+        entry['id'] = model_id
+        if route.get('owned_by'):
+            entry['owned_by'] = route['owned_by']
+        return entry
+    # Bare stub — backend has no /v1/models (Kokoro, Whisper, etc.).
+    return {
         "id": model_id,
         "object": "model",
         "created": 1704067200,
-        "owned_by": route.get('owned_by', 'local'),
+        "owned_by": route.get('owned_by') or 'local',
         "permission": [],
         "root": model_id,
         "parent": None,
     }
-    upstream = _upstream_model_cache.get(route.get('backend_model_name'))
-    if upstream:
-        for field in _UPSTREAM_PASSTHROUGH_FIELDS:
-            if field in upstream:
-                entry[field] = upstream[field]
-    return entry
 
 # API keys
 API_KEYS: Dict[str, Dict[str, Any]] = {}
@@ -815,8 +875,7 @@ async def chat_completions(req: Request):
     if route['type'] not in ['chat', 'vision']:
         raise HTTPException(status_code=400, detail=f"Model '{model}' is not a chat model")
 
-    # Replace model name with backend_model_name
-    payload['model'] = route.get('backend_model_name', model)
+    payload['model'] = route.get('effective_backend_name', model)
 
     stream = payload.get('stream', False)
     set_log_context(model=model)
@@ -866,7 +925,7 @@ async def embeddings(req: Request):
     if route['type'] != 'embedding':
         raise HTTPException(status_code=400, detail=f"Model '{model}' is not an embedding model")
 
-    payload['model'] = route.get('backend_model_name', model)
+    payload['model'] = route.get('effective_backend_name', model)
     set_log_context(model=model)
 
     logger.info("embeddings request")
@@ -917,8 +976,7 @@ async def rerank(req: Request):
     if route['type'] != 'reranker':
         raise HTTPException(status_code=400, detail=f"Model '{model}' is not a reranker model")
 
-    # Bug 1 fix: Use exclude_none to prevent top_n: null serialization
-    payload['model'] = route.get('backend_model_name', model)
+    payload['model'] = route.get('effective_backend_name', model)
     # Remove top_n if present to prevent crash (pop is safe - no KeyError)
     payload.pop('top_n', None)
 
@@ -974,7 +1032,7 @@ async def audio_transcriptions(req: Request):
     filename = file.filename or "audio.wav"
     content_type = file.content_type or "audio/wav"
 
-    backend_model = route.get('backend_model_name', model_name)
+    backend_model = route.get('effective_backend_name', model_name)
     files = {'file': (filename, file_bytes, content_type)}
     data = {"model": backend_model}
 
@@ -1027,7 +1085,7 @@ async def audio_speech(req: Request):
     if route['type'] != 'tts':
         raise HTTPException(status_code=400, detail=f"Model '{model}' is not a text-to-speech model")
 
-    payload['model'] = route.get('backend_model_name', model)
+    payload['model'] = route.get('effective_backend_name', model)
     set_log_context(model=model)
 
     logger.info("tts request")
