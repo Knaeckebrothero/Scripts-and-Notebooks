@@ -236,13 +236,13 @@ async def _fetch_upstream_models(
     try:
         resp = await client.get(f"{backend}/v1/models", headers=headers, timeout=5.0)
         if resp.status_code != 200:
-            logger.debug(
+            logger.info(
                 f"upstream /v1/models {backend} returned {resp.status_code}"
             )
             return []
         return resp.json().get('data', []) or []
     except Exception as e:
-        logger.debug(f"upstream /v1/models {backend} failed: {e}")
+        logger.info(f"upstream /v1/models {backend} failed: {e}")
         return []
 
 
@@ -321,7 +321,24 @@ async def discover_and_rebuild() -> None:
 
 
 async def _discovery_loop() -> None:
-    """Re-run discovery every REFRESH_INTERVAL seconds until cancelled."""
+    """Re-run discovery on a warmup ladder, then settle into REFRESH_INTERVAL.
+
+    The startup probe (called from `lifespan`) often runs before VPN sidecars
+    finish bringing up their tunnels, so backends are unreachable for the
+    first 10–60 seconds of pod life. Waiting REFRESH_INTERVAL (5 min default)
+    before the next attempt would leave `/v1/models` returning bare stubs for
+    that whole window. The warmup ladder retries quickly until backends come
+    online, then drops to the slower steady-state cadence.
+    """
+    warmup_delays = (15, 30, 60, 120)
+    for delay in warmup_delays:
+        try:
+            await asyncio.sleep(delay)
+            await discover_and_rebuild()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning(f"warmup discovery refresh failed: {e}")
     while True:
         try:
             await asyncio.sleep(REFRESH_INTERVAL)
