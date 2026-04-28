@@ -1,15 +1,17 @@
 name: llm-containers
 
-# Build and push vLLM inference container images to GHCR.
+# Build and push inference container images to GHCR.
 #
 # Triggers:
 #   - push to main when files under llm_containers/ (or this workflow) change
-#   - manual workflow_dispatch (always builds all four)
+#   - manual workflow_dispatch (always builds all six)
 #
 # Images:
 #   ghcr.io/knaeckebrothero/gemma4-dense-vllm
 #   ghcr.io/knaeckebrothero/gemma4-dense-l40s-vllm
 #   ghcr.io/knaeckebrothero/gemma4-moe-vllm
+#   ghcr.io/knaeckebrothero/gemma4-moe-strix-llamacpp
+#   ghcr.io/knaeckebrothero/gemma4-dense-strix-llamacpp
 #   ghcr.io/knaeckebrothero/qwen3-next-vllm
 #
 # Tags:
@@ -19,9 +21,11 @@ name: llm-containers
 # Notes:
 #   - The vllm/vllm-openai base image is ~20 GB, so we free extra disk on the
 #     runner before building. Without this, the push layer can OOM-disk.
+#   - The llama.cpp Vulkan base is much smaller (~1 GB) but the disk-free step
+#     is harmless on those runs.
 #   - fail-fast=false lets unrelated container builds succeed if one breaks.
-#   - GHA cache is scoped per container so the four builds don't evict each
-#     other (10 GB repo cache budget is tight with a shared scope).
+#   - GHA cache is scoped per container so the builds don't evict each other
+#     (10 GB repo cache budget is tight with a shared scope).
 
 on:
   push:
@@ -30,6 +34,8 @@ on:
       - 'llm_containers/gemma4-dense-vllm/**'
       - 'llm_containers/gemma4-dense-l40s-vllm/**'
       - 'llm_containers/gemma4-moe-vllm/**'
+      - 'llm_containers/gemma4-moe-strix-llamacpp/**'
+      - 'llm_containers/gemma4-dense-strix-llamacpp/**'
       - 'llm_containers/qwen3-next-vllm/**'
       - '.github/workflows/llm-containers.yml'
   workflow_dispatch:
@@ -56,6 +62,8 @@ jobs:
           - gemma4-dense-vllm
           - gemma4-dense-l40s-vllm
           - gemma4-moe-vllm
+          - gemma4-moe-strix-llamacpp
+          - gemma4-dense-strix-llamacpp
           - qwen3-next-vllm
     steps:
       - uses: actions/checkout@v4
