@@ -1,13 +1,18 @@
-# Optimized vLLM image for Gemma 4 31B dense
+# Optimized vLLM image for Gemma 4 31B dense — A100 / H100 / H200 / B200
 #
 # Build: docker build -t gemma4-dense-vllm:latest .
 # Run:   docker run --gpus all -p 8000:8000 --ipc=host gemma4-dense-vllm:latest
 #
-# Default model: RedHatAI/gemma-4-31B-it-FP8-Dynamic (FP8 dynamic W8A8, ~33 GB)
+# This image targets HBM-class GPUs (A100/H100/H200/B200) at FP8-Dynamic
+# weights with full 128K context. For L40S-48GB (Ada GDDR6) use the sibling
+# image gemma4-dense-l40s-vllm — it ships INT4 AWQ + 8K context tuned for
+# 5 concurrent agent sessions on 48 GB.
+#
+# Default model: RedHatAI/gemma-4-31B-it-FP8-Dynamic (FP8 dynamic W8A8, ~31 GB)
 #   - Base: google/gemma-4-31B-it (dense, 30.7B params, 256K native context)
 #   - vLLM-tested by Red Hat AI (maintainers of llm-compressor)
 #   - FP8 weights cut memory ~50% vs BF16 with near-lossless quality
-#   - Native FP8 tensor cores on Hopper/Blackwell; Marlin W8A16 fallback on Ampere/Ada
+#   - Native FP8 tensor cores on Hopper/Blackwell; Marlin W8A16 fallback on Ampere
 #   - Modalities: text + image + video (no audio at this size)
 #   - License: Apache 2.0 (base) + Apache 2.0 (RedHatAI re-pack)
 #
@@ -17,17 +22,25 @@
 #   - Hybrid KV Cache Manager required for interleaved 5:1 local-SWA + global
 #     attention. FLASHINFER backend is NOT compatible (vLLM issue #20865).
 #   - Standard GQA (no attention sinks). head_dim=256 + interleaved SWA makes
-#     FA2 on Ampere/Ada reject the config (head_size check), so we default to
+#     FA2 on Ampere reject the config (head_size check), so we default to
 #     TRITON_ATTN there. FA3 on Hopper/Blackwell handles it natively.
 #
-# GPU compatibility (at default FP8 / 128K context):
-#   - A100-80GB (sm_80):  fits comfortably, ~30 GB headroom for higher concurrency
-#   - H100/H200 (sm_90):  native FP8 TC, full 256K ctx easy
-#   - L40S-48GB (sm_89):  fits at 128K, native FP8 TC (set KV_CACHE_DTYPE=fp8_e4m3)
-#   - RTX 4090-24GB:      use AWQ variant (QuantTrio/gemma-4-31B-it-AWQ, ~20 GB)
-#   - To run full BF16:   set MODEL=google/gemma-4-31B-it (requires A100-80GB+)
+# GPU compatibility (at default FP8 weights / 128K context / BF16 KV):
+#   - A100-80GB (sm_80):  exactly 1 concurrent 128K sequence (~42.7 GB / 42.6 GB pool).
+#                         For >1 concurrent agent, queue externally or lower
+#                         MAX_MODEL_LEN (e.g. 65536 → 2 concurrent fit).
+#   - H100/H200 (sm_90):  full 128K with concurrency headroom; native FP8 TC,
+#                         but KV must stay BF16 (vLLM Issue #40388).
+#   - B200 (sm_100):      FP4 weights path possible, but this image stays on
+#                         FP8-Dynamic. Use NVFP4 variants for max throughput.
+#   - L40S-48GB:          NOT this image — use gemma4-dense-l40s-vllm.
+#   - RTX 4090-24GB:      Insufficient VRAM at FP8. Use the MoE container.
+#   - To run full BF16:   set MODEL=google/gemma-4-31B-it (requires A100-80GB+).
 
-FROM vllm/vllm-openai:v0.19.1
+# v0.20.0 ships PRs #38992, #38909, #39114 — fixes gemma4 tool-call parser
+# thread-safety violations under concurrent streaming (silent JSON corruption,
+# infinite <pad> loops on v0.19.1).
+FROM vllm/vllm-openai:v0.20.0
 
 ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive
@@ -41,8 +54,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && echo 'PasswordAuthentication yes' >> /etc/ssh/sshd_config \
     && echo 'PermitEmptyPasswords no' >> /etc/ssh/sshd_config
 
-# Ampere (A100), Ada (L40S/4090), Hopper (H100/H200)
-ENV TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0+PTX"
+# Ampere (A100), Hopper (H100/H200), Blackwell (B200) — Ada lives in the
+# sibling gemma4-dense-l40s-vllm image so its kernel cache is removed here.
+ENV TORCH_CUDA_ARCH_LIST="8.0;9.0;10.0+PTX"
 
 WORKDIR /app
 
@@ -51,7 +65,11 @@ RUN python3 -c "import vllm; print(f'vLLM version: {vllm.__version__}')"
 COPY entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
+# start-period=1200s covers worst-case uncached cold boot (~10 min HF download +
+# ~50 s torch.compile + KV profiling). Without this, k8s/RunPod readiness probes
+# SIGKILL the container mid-compile, trapping it in an infinite restart loop.
+# Drops to ~2-3 min when the torch_compile_cache + HF cache volumes are warm.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=1200s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 EXPOSE 8000 22
