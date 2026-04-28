@@ -102,8 +102,11 @@ case "${FLASH_ATTN,,}" in
 esac
 CMD="${CMD} --cache-type-k ${CACHE_TYPE_K}"
 CMD="${CMD} --cache-type-v ${CACHE_TYPE_V}"
-CMD="${CMD} --cache-prompt"
-CMD="${CMD} --cache-ram ${CACHE_RAM_MB}"
+# --cache-prompt and --cache-ram do not exist in :server-vulkan-b5350. They
+# are forward-looking flags from later upstream commits (per-slot prompt
+# caching is enabled by default on this build, and host-RAM hot-swap is not
+# yet wired up). Re-enable when the base image is bumped past the PR that
+# adds them. CACHE_RAM_MB is kept as an env var so the bump is one-line.
 
 [ "${NO_MMAP}" = "true" ] && CMD="${CMD} --no-mmap"
 [ "${USE_JINJA}" = "true" ] && CMD="${CMD} --jinja"
