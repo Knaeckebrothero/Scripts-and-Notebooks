@@ -19,10 +19,9 @@
 #       -v radv-cache:/root/.cache/mesa_shader_cache \
 #       gemma4-dense-strix-llamacpp:latest
 #
-# Image base: same b8765 server-vulkan tag as the MoE container — both PRs
-# #19625 (scalar FA + Wave32) and #20551 (graphics queue) are required for
-# the ~25% Strix Halo throughput uplift.
-FROM ghcr.io/ggml-org/llama.cpp:server-vulkan-b8765
+# Image base: upstream prebuilt server-vulkan image, same pinned tag as the
+# MoE sibling. Bump in lockstep when newer Strix Halo fixes land.
+FROM ghcr.io/ggml-org/llama.cpp:server-vulkan-b5350
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1

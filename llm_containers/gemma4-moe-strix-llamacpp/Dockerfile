@@ -19,10 +19,12 @@
 #       -v radv-cache:/root/.cache/mesa_shader_cache \
 #       gemma4-moe-strix-llamacpp:latest
 #
-# Image base: upstream prebuilt server-vulkan image at b8765 (post PR #19625
-# scalar-FA + Wave32-on-AMD, post PR #20551 graphics-queue-on-AMD; ~25%
-# aggregate Strix Halo throughput uplift over Dec 2025 builds).
-FROM ghcr.io/ggml-org/llama.cpp:server-vulkan-b8765
+# Image base: upstream prebuilt server-vulkan image, pinned to the latest
+# build verified at the time of writing. Bump the build number as new fixes
+# for RDNA 3.5 / gfx1151 land — track ggml-org/llama.cpp release notes.
+# Use `:server-vulkan` (unpinned) instead if you want auto-updates at the
+# cost of build reproducibility.
+FROM ghcr.io/ggml-org/llama.cpp:server-vulkan-b5350
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
