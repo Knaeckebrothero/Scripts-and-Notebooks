@@ -33,7 +33,11 @@ ENV PYTHONUNBUFFERED=1
 # and roughly halves prefill speed (per hogeheer499 guide, Mar 2026). If the
 # upstream image bundles AMDVLK, force RADV via env.
 ENV AMD_VULKAN_ICD=RADV
-ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json
+# RADV ICD filename in the upstream :server-vulkan image carries an .x86_64
+# arch suffix (radeon_icd.x86_64.json), not the bare radeon_icd.json. Pinning
+# the wrong path makes the Vulkan loader find no ICDs and silently fall back
+# to CPU. Verified against ghcr.io/ggml-org/llama.cpp:server-vulkan-b5350.
+ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
 
 # Required to enable RDNA 3.5 codepaths in llama.cpp's Vulkan backend on
 # gfx1151. Will be removed once RDNA 3.5 is no longer experimental upstream.

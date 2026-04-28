@@ -48,6 +48,10 @@ BATCH_SIZE="${BATCH_SIZE:-2048}"
 UBATCH_SIZE="${UBATCH_SIZE:-512}"   # gfx1151 sweet spot per ollama #15601 / lhl benchmarks
 
 N_GPU_LAYERS="${N_GPU_LAYERS:-99}"  # all layers on iGPU; unified memory makes this cheap
+# --flash-attn is a bare boolean flag on the pinned :server-vulkan-b5350 base
+# (the on|off|auto tri-state is from a later upstream PR than what's in this
+# build). Accept any truthy value here and emit the bare flag below; bump this
+# back to a value-bearing form when the base image is bumped past tri-state.
 FLASH_ATTN="${FLASH_ATTN:-on}"      # mandatory on Strix Halo for q8_0 KV path
 
 CACHE_TYPE_K="${CACHE_TYPE_K:-q8_0}"
@@ -91,7 +95,11 @@ CMD="${CMD} --parallel ${N_PARALLEL}"
 CMD="${CMD} --ctx-size ${CTX_TOTAL}"
 CMD="${CMD} --batch-size ${BATCH_SIZE}"
 CMD="${CMD} --ubatch-size ${UBATCH_SIZE}"
-CMD="${CMD} --flash-attn ${FLASH_ATTN}"
+case "${FLASH_ATTN,,}" in
+    on|true|1|yes) CMD="${CMD} --flash-attn" ;;
+    off|false|0|no) ;;
+    *) CMD="${CMD} --flash-attn" ;;
+esac
 CMD="${CMD} --cache-type-k ${CACHE_TYPE_K}"
 CMD="${CMD} --cache-type-v ${CACHE_TYPE_V}"
 CMD="${CMD} --cache-prompt"
