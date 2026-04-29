@@ -13,6 +13,7 @@ name: llm-containers
 #   ghcr.io/knaeckebrothero/gemma4-moe-strix-llamacpp
 #   ghcr.io/knaeckebrothero/gemma4-dense-strix-llamacpp
 #   ghcr.io/knaeckebrothero/qwen3-next-vllm
+#   ghcr.io/knaeckebrothero/qwen3-embedding-strix-llamacpp
 #
 # Tags:
 #   - sha-<short>   always
@@ -37,6 +38,7 @@ on:
       - 'llm_containers/gemma4-moe-strix-llamacpp/**'
       - 'llm_containers/gemma4-dense-strix-llamacpp/**'
       - 'llm_containers/qwen3-next-vllm/**'
+      - 'llm_containers/qwen3-embedding-strix-llamacpp/**'
       - '.github/workflows/llm-containers.yml'
   workflow_dispatch:
 
@@ -65,6 +67,7 @@ jobs:
           - gemma4-moe-strix-llamacpp
           - gemma4-dense-strix-llamacpp
           - qwen3-next-vllm
+          - qwen3-embedding-strix-llamacpp
     steps:
       - uses: actions/checkout@v4
 
