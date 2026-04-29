@@ -48,11 +48,7 @@ BATCH_SIZE="${BATCH_SIZE:-2048}"
 UBATCH_SIZE="${UBATCH_SIZE:-512}"   # gfx1151 sweet spot per ollama #15601 / lhl benchmarks
 
 N_GPU_LAYERS="${N_GPU_LAYERS:-99}"  # all layers on iGPU; unified memory makes this cheap
-# --flash-attn is a bare boolean flag on the pinned :server-vulkan-b5350 base
-# (the on|off|auto tri-state is from a later upstream PR than what's in this
-# build). Accept any truthy value here and emit the bare flag below; bump this
-# back to a value-bearing form when the base image is bumped past tri-state.
-FLASH_ATTN="${FLASH_ATTN:-on}"      # mandatory on Strix Halo for q8_0 KV path
+FLASH_ATTN="${FLASH_ATTN:-on}"      # mandatory on Strix Halo for q8_0 KV path; tri-state on|off|auto in b6653+
 
 CACHE_TYPE_K="${CACHE_TYPE_K:-q8_0}"
 CACHE_TYPE_V="${CACHE_TYPE_V:-q8_0}"
@@ -95,18 +91,13 @@ CMD="${CMD} --parallel ${N_PARALLEL}"
 CMD="${CMD} --ctx-size ${CTX_TOTAL}"
 CMD="${CMD} --batch-size ${BATCH_SIZE}"
 CMD="${CMD} --ubatch-size ${UBATCH_SIZE}"
-case "${FLASH_ATTN,,}" in
-    on|true|1|yes) CMD="${CMD} --flash-attn" ;;
-    off|false|0|no) ;;
-    *) CMD="${CMD} --flash-attn" ;;
-esac
+CMD="${CMD} --flash-attn ${FLASH_ATTN}"
 CMD="${CMD} --cache-type-k ${CACHE_TYPE_K}"
 CMD="${CMD} --cache-type-v ${CACHE_TYPE_V}"
-# --cache-prompt and --cache-ram do not exist in :server-vulkan-b5350. They
-# are forward-looking flags from later upstream commits (per-slot prompt
-# caching is enabled by default on this build, and host-RAM hot-swap is not
-# yet wired up). Re-enable when the base image is bumped past the PR that
-# adds them. CACHE_RAM_MB is kept as an env var so the bump is one-line.
+# --cache-prompt and --cache-ram are not flags in upstream llama.cpp (verified
+# against b6653; they appear to be from a fork or pending PR). Per-slot prompt
+# caching is on by default in the server. CACHE_RAM_MB is kept as a no-op env
+# var for forward-compat in case host-RAM hot-swap lands upstream later.
 
 [ "${NO_MMAP}" = "true" ] && CMD="${CMD} --no-mmap"
 [ "${USE_JINJA}" = "true" ] && CMD="${CMD} --jinja"
