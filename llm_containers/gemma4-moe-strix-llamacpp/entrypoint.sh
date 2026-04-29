@@ -94,10 +94,8 @@ CMD="${CMD} --ubatch-size ${UBATCH_SIZE}"
 CMD="${CMD} --flash-attn ${FLASH_ATTN}"
 CMD="${CMD} --cache-type-k ${CACHE_TYPE_K}"
 CMD="${CMD} --cache-type-v ${CACHE_TYPE_V}"
-# --cache-prompt and --cache-ram are not flags in upstream llama.cpp (verified
-# against b6653; they appear to be from a fork or pending PR). Per-slot prompt
-# caching is on by default in the server. CACHE_RAM_MB is kept as a no-op env
-# var for forward-compat in case host-RAM hot-swap lands upstream later.
+CMD="${CMD} --cache-prompt"
+CMD="${CMD} --cache-ram ${CACHE_RAM_MB}"
 
 [ "${NO_MMAP}" = "true" ] && CMD="${CMD} --no-mmap"
 [ "${USE_JINJA}" = "true" ] && CMD="${CMD} --jinja"

@@ -24,7 +24,7 @@
 # for RDNA 3.5 / gfx1151 land — track ggml-org/llama.cpp release notes.
 # Use `:server-vulkan` (unpinned) instead if you want auto-updates at the
 # cost of build reproducibility.
-FROM ghcr.io/ggml-org/llama.cpp:server-vulkan-b6653
+FROM ghcr.io/ggml-org/llama.cpp:server-vulkan-b8967
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
@@ -33,11 +33,11 @@ ENV PYTHONUNBUFFERED=1
 # and roughly halves prefill speed (per hogeheer499 guide, Mar 2026). If the
 # upstream image bundles AMDVLK, force RADV via env.
 ENV AMD_VULKAN_ICD=RADV
-# RADV ICD filename in the upstream :server-vulkan image carries an .x86_64
-# arch suffix (radeon_icd.x86_64.json), not the bare radeon_icd.json. Pinning
-# the wrong path makes the Vulkan loader find no ICDs and silently fall back
-# to CPU. Verified against ghcr.io/ggml-org/llama.cpp:server-vulkan-b6653.
-ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.x86_64.json
+# Only RADV is bundled in this upstream image, but pin the ICD path explicitly
+# so a future change can't silently route through a different ICD. Note: the
+# filename has flipped between releases (radeon_icd.json in b8967 vs
+# radeon_icd.x86_64.json in earlier b6xxx tags), so re-verify on bump.
+ENV VK_ICD_FILENAMES=/usr/share/vulkan/icd.d/radeon_icd.json
 
 # Required to enable RDNA 3.5 codepaths in llama.cpp's Vulkan backend on
 # gfx1151. Will be removed once RDNA 3.5 is no longer experimental upstream.
