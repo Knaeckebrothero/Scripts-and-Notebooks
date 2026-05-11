@@ -758,7 +758,33 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# Health check
+# Liveness/readiness probe — intentionally cheap. Kubelet readiness probes
+# typically run with sub-second timeouts; ``/health`` walks every backend
+# so a single stalled upstream blows through that budget and triggers a
+# crashloop. Point ``livenessProbe`` and ``readinessProbe`` at ``/livez``;
+# keep ``/health`` for operator-facing backend visibility.
+@app.get("/livez")
+async def liveness_check():
+    """Return 200 as long as the router process is running."""
+    return {"status": "ok"}
+
+
+# Short per-backend probe timeout so ``/health`` total latency is bounded
+# by the slowest backend (probes run in parallel) rather than 5s × N.
+_HEALTH_PROBE_TIMEOUT = 2.0
+
+
+async def _probe_backend(backend_url: str, probe_path: str, proxy: Optional[str]) -> str:
+    try:
+        probe_client = get_client(proxy)
+        response = await probe_client.get(
+            f"{backend_url}{probe_path}", timeout=_HEALTH_PROBE_TIMEOUT
+        )
+        return "healthy" if response.status_code == 200 else "unhealthy"
+    except Exception:
+        return "unavailable"
+
+
 @app.get("/health")
 async def health_check():
     """Report per-backend reachability.
@@ -771,23 +797,31 @@ async def health_check():
     don't expose a health endpoint). Status values: ``healthy`` (200),
     ``unhealthy`` (non-200), ``unavailable`` (connect/timeout), ``skipped``
     (probing disabled). Router itself always reports healthy.
+
+    Probes fan out in parallel via ``asyncio.gather`` so total latency is
+    bounded by the slowest single backend. Not suitable for kubelet
+    probes — use ``/livez`` for those.
     """
+    plan: List[Tuple[str, str, Optional[str]]] = []
+    seen: set = set()
     backend_status: Dict[str, str] = {}
     for route in config.get('routes', []):
         proxy = route.get('proxy')
         probe_path = route['health_path'] if 'health_path' in route else '/health'
         for backend_url in _normalize_backends(route.get('backend', [])):
-            if backend_url in backend_status:
+            if backend_url in seen:
                 continue
+            seen.add(backend_url)
             if not probe_path:
                 backend_status[backend_url] = "skipped"
                 continue
-            try:
-                probe_client = get_client(proxy)
-                response = await probe_client.get(f"{backend_url}{probe_path}", timeout=5.0)
-                backend_status[backend_url] = "healthy" if response.status_code == 200 else "unhealthy"
-            except Exception:
-                backend_status[backend_url] = "unavailable"
+            plan.append((backend_url, probe_path, proxy))
+
+    results = await asyncio.gather(
+        *(_probe_backend(url, path, proxy) for url, path, proxy in plan)
+    )
+    for (url, _, _), status in zip(plan, results):
+        backend_status[url] = status
 
     logger.debug(f"health check backends={backend_status}")
     return {"status": "healthy", "router": "model-orchestrator", "backends": backend_status}
