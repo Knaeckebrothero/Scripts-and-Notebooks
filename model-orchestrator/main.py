@@ -525,21 +525,28 @@ async def proxy_request(
     data: Optional[Dict] = None,
     stream: bool = False,
     timeout: float = 120.0,
+    endpoint_override: Optional[str] = None,
+    rate_limit: bool = True,
 ) -> Response:
     """Forward a request to one of the route's backends with retry + failover.
 
     Non-streaming requests attempt up to 2 distinct backends, marking a
     backend unhealthy on ConnectError/TimeoutException/5xx. Streaming
     requests pick one backend with no failover — once bytes start flowing
-    there's no safe way to retry. Auth/rate limit live outside this function;
-    the rate-limit check here enforces per-key budgets after auth has
-    already succeeded in the handler.
+    there's no safe way to retry. Auth lives outside this function; the
+    per-key rate-limit check here runs after auth has already succeeded in
+    the handler, and is skipped when ``rate_limit=False`` — used by open,
+    unauthenticated discovery calls like ``/v1/audio/voices``.
 
     If the route declares a ``proxy:``, the cached httpx client for that
     proxy URL is used; otherwise the direct client.
+
+    ``endpoint_override`` replaces the route's configured ``endpoint`` for
+    this one call — used to hit a sibling path on the same backend (e.g. a
+    TTS route's ``/v1/audio/voices`` instead of its ``/v1/audio/speech``).
     """
     backends: List[str] = route['backends']
-    endpoint: str = route['endpoint']
+    endpoint: str = endpoint_override or route['endpoint']
     proxy: Optional[str] = route.get('proxy')
     route_name: str = route['name']
     client = get_client(proxy)
@@ -560,24 +567,27 @@ async def proxy_request(
             detail=f"Route '{route_name}' has no backends configured",
         )
 
-    # Rate limit (counted once regardless of retries).
-    allowed, limit, remaining = check_rate_limit(api_key, tier)
-    if not allowed:
-        raise HTTPException(
-            status_code=429,
-            detail="Rate limit exceeded",
-            headers={
-                "X-RateLimit-Limit": str(limit),
-                "X-RateLimit-Remaining": "0",
-                "X-RateLimit-Reset": str(get_reset_time(api_key)),
-            },
-        )
-
-    rate_headers = {
-        "X-RateLimit-Limit": str(limit),
-        "X-RateLimit-Remaining": str(remaining),
-        "X-RateLimit-Reset": str(get_reset_time(api_key)),
-    }
+    # Rate limit (counted once regardless of retries). Skipped for open,
+    # unauthenticated discovery calls (rate_limit=False), which carry no
+    # per-key budget and so return no X-RateLimit-* headers.
+    rate_headers: Dict[str, str] = {}
+    if rate_limit:
+        allowed, limit, remaining = check_rate_limit(api_key, tier)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded",
+                headers={
+                    "X-RateLimit-Limit": str(limit),
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(get_reset_time(api_key)),
+                },
+            )
+        rate_headers = {
+            "X-RateLimit-Limit": str(limit),
+            "X-RateLimit-Remaining": str(remaining),
+            "X-RateLimit-Reset": str(get_reset_time(api_key)),
+        }
 
     # Do NOT forward the client's auth to backends (Bug 4 fix). Let httpx set
     # Content-Type for file uploads; set it explicitly for JSON. If the route
@@ -1186,6 +1196,49 @@ async def audio_speech(req: Request):
         tier=tier,
         payload=payload,
         timeout=60.0,
+    )
+
+@app.get("/v1/audio/voices")
+async def audio_voices(model: Optional[str] = None):
+    """List the voices a text-to-speech backend offers, by forwarding to it.
+
+    This is a kokoro-fastapi extension, not part of the OpenAI spec — the
+    router keeps no voice list of its own, so it proxies the request to a
+    ``type: tts`` backend's own ``/v1/audio/voices`` and returns that JSON
+    unchanged. With a single TTS backend no parameters are needed; pass
+    ``?model=<alias>`` to target a specific TTS route when more than one
+    exists (otherwise the first configured TTS route is used).
+
+    Open discovery endpoint, like ``/v1/models``: no auth and no rate limit
+    (the upstream voice list isn't sensitive), so no X-RateLimit-* headers.
+    Status codes: 200 on success; 400 when the named model isn't a TTS
+    model; 404 when the model is unknown or no TTS backend is configured;
+    5xx on backend failure.
+    """
+    if model is not None:
+        if model not in MODEL_ROUTES:
+            raise HTTPException(status_code=404, detail=f"Model '{model}' not found")
+        route = MODEL_ROUTES[model]
+        if route['type'] != 'tts':
+            raise HTTPException(status_code=400, detail=f"Model '{model}' is not a text-to-speech model")
+    else:
+        route = next((r for r in MODEL_ROUTES.values() if r['type'] == 'tts'), None)
+        if route is None:
+            raise HTTPException(status_code=404, detail="No text-to-speech backend is configured")
+        model = route['name']
+
+    set_log_context(model=model)
+    logger.info("tts voices request")
+
+    return await proxy_request(
+        method="GET",
+        route=route,
+        api_key=None,
+        model=model,
+        tier="standard",
+        endpoint_override="/v1/audio/voices",
+        rate_limit=False,
+        timeout=30.0,
     )
 
 if __name__ == "__main__":

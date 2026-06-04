@@ -147,6 +147,10 @@ routes:
     owned_by: "openai"
 
   # Text-to-speech — Kokoro also doesn't expose /health.
+  # The router additionally serves `GET /v1/audio/voices` for tts routes,
+  # forwarding to this backend's own voice listing (a kokoro-fastapi
+  # extension; open, no auth — like `/v1/models`). With one tts route it
+  # needs no args; clients with several can pass `?model=<alias>` to pick one.
   - name: "Kokoro-82M"
     type: "tts"
     backend: "http://127.0.0.1:8880"

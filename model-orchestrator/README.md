@@ -50,6 +50,13 @@ request, or generated). Log lines emitted while handling the request
 include the same id plus any known context fields (owner, tier, model,
 backend).
 
+Two discovery endpoints don't follow the model-in-body routing above, and
+both are open — no auth, no rate limit. `GET /v1/models` lists configured +
+discovered models from local metadata. `GET /v1/audio/voices` forwards to a
+`tts` backend's own voice listing (a kokoro-fastapi extension) — with one
+TTS route it needs no args, otherwise pass `?model=<alias>` to choose among
+several.
+
 ## Quick start (Podman Quadlet)
 
 ```bash
