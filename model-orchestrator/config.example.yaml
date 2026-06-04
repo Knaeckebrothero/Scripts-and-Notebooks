@@ -102,6 +102,32 @@ routes:
       - "gpt-oss-20b"
     owned_by: "openai"
 
+  # Chat model with per-request defaults (Gemma 4 reasoning)
+  # --------------------------------------------------------
+  # `request_defaults` is shallow-merged into the outbound payload for this
+  # route before forwarding; any value the client sends wins. Gemma 4 only
+  # returns a separate `reasoning` field when the <|channel> delimiters survive
+  # detokenization, which requires `skip_special_tokens: false` on every
+  # request — and vLLM has no server-side default for that flag, so the gateway
+  # injects it here. `enable_thinking` turns reasoning on (the container also
+  # defaults this via --default-chat-template-kwargs; repeating it is harmless).
+  # NOTE: reliable for non-streaming responses. vLLM's *streaming* reasoning
+  # parser is still affected by upstream issue #38855, so streamed requests may
+  # still surface the <|channel> markers inline in `content`.
+  - name: "Gemma-4-26B-A4B"
+    type: "chat"
+    backend: "http://127.0.0.1:8000"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "google/gemma-4-26B-A4B-it"
+    models:
+      - "gemma-4-26b-a4b"
+      - "gemma-4-moe"
+    owned_by: "google"
+    request_defaults:
+      skip_special_tokens: false
+      chat_template_kwargs:
+        enable_thinking: true
+
   # Speech-to-text
   # `health_path: null` disables /health probing for this backend — the
   # default Whisper server image doesn't expose /health, so the router's

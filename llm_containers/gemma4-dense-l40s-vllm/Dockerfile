@@ -38,10 +38,13 @@
 #   - A100-80GB (sm_80):     Use gemma4-dense-vllm. INT4 here wastes the 80 GB.
 #   - H100/H200 (sm_90):     Use gemma4-dense-vllm. INT4 here wastes HBM3.
 
-# v0.20.0 ships PRs #38992, #38909, #39114 — fixes gemma4 tool-call parser
-# thread-safety violations under concurrent streaming (silent JSON corruption,
-# infinite <pad> loops on v0.19.1). Required for INT4 + concurrent agent loops.
-FROM vllm/vllm-openai:v0.20.0
+# v0.22.0 builds on v0.20.0's gemma4 tool-call parser thread-safety fixes
+# (#38992, #38909, #39114 — silent JSON corruption, infinite <pad> loops),
+# required for INT4 + concurrent agent loops, and adds the
+# streaming-after-tool-results reasoning leak fix (#39885) and tool-call
+# float-corruption fix (#42128). Reasoning still needs client-side
+# skip_special_tokens=false (vLLM #38855, open) — see entrypoint.sh.
+FROM vllm/vllm-openai:v0.22.0
 
 ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive

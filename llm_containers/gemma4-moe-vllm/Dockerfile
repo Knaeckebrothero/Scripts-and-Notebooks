@@ -24,7 +24,12 @@
 #   - RTX 4090-24GB:      INT4 quant only, 32K ctx
 #   - H100/H200:          BF16 @ 256K ctx, FA3 backend
 
-FROM vllm/vllm-openai:v0.19.1
+# v0.22.0: Gemma 4 MoE routing-closure fix (#42250), tool-call float-corruption
+# fix (#42128), and the streaming-after-tool-results reasoning leak fix (#39885)
+# that landed after v0.19.x. Reasoning still needs client-side
+# skip_special_tokens=false (vLLM #38855, open) — handled by the orchestrator /
+# documented in entrypoint.sh.
+FROM vllm/vllm-openai:v0.22.0
 
 ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive

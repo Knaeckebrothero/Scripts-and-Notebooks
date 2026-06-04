@@ -123,7 +123,10 @@ curl -k -X POST http://localhost:8000/v1/chat/completions \
 Validation: response payload contains a non-empty `reasoning_content` key
 *and* the final numerical answer in `content`. **Required: client must send
 `"skip_special_tokens": false`** — otherwise `<|channel|>` delimiters are
-stripped before the parser sees them (vLLM Issue #38855).
+stripped before the parser sees them (vLLM Issue #38855). In production the
+`model-orchestrator` injects this for the Gemma 4 routes. **Streaming caveat:**
+#38855 still affects the streaming parser path, so this probe is reliable for
+non-streaming (`stream=false`) only.
 
 ### 2. Parallel tool calling
 

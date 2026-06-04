@@ -1,6 +1,9 @@
 # Local environment
 .env
 
+# Secrets / credentials (never commit)
+credentials.txt
+
 # SQLite database files
 *.db
 

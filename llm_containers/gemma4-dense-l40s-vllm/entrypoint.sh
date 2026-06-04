@@ -189,7 +189,11 @@ REASONING_PARSER="${REASONING_PARSER:-gemma4}"
 
 # Thinking mode — server-side <|think|> activation. Pair with client-side
 # `"skip_special_tokens": false` so the <|channel|> delimiters reach the
-# reasoning parser (vLLM Issue #38855).
+# reasoning parser (vLLM Issue #38855). The model-orchestrator injects that
+# flag for the Gemma 4 routes; direct callers must send it. STREAMING CAVEAT:
+# skip_special_tokens=false is unreliable with stream=true (the gemma4 parser's
+# streaming path matches decoded text, not token ids) — reasoning may still
+# surface inline in `content`.
 ENABLE_THINKING="${ENABLE_THINKING:-true}"
 
 # API

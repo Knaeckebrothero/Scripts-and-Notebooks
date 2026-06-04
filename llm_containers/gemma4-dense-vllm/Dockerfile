@@ -37,10 +37,13 @@
 #   - RTX 4090-24GB:      Insufficient VRAM at FP8. Use the MoE container.
 #   - To run full BF16:   set MODEL=google/gemma-4-31B-it (requires A100-80GB+).
 
-# v0.20.0 ships PRs #38992, #38909, #39114 — fixes gemma4 tool-call parser
-# thread-safety violations under concurrent streaming (silent JSON corruption,
-# infinite <pad> loops on v0.19.1).
-FROM vllm/vllm-openai:v0.20.0
+# v0.22.0 builds on v0.20.0's gemma4 tool-call parser thread-safety fixes
+# (#38992, #38909, #39114 — silent JSON corruption, infinite <pad> loops) and
+# adds the streaming-after-tool-results reasoning leak fix (#39885), tool-call
+# float-corruption fix (#42128), and mixed-resolution image co-batching fix
+# (#42217). Reasoning still needs client-side skip_special_tokens=false
+# (vLLM #38855, open) — see entrypoint.sh.
+FROM vllm/vllm-openai:v0.22.0
 
 ENV PYTHONUNBUFFERED=1
 ENV DEBIAN_FRONTEND=noninteractive

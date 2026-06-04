@@ -241,7 +241,11 @@ REASONING_PARSER="${REASONING_PARSER:-gemma4}"
 # model emits Chain-of-Thought inline in `content`. Pair this with client-side
 # `"skip_special_tokens": false` in the request payload so the <|channel|>
 # delimiters survive vLLM's text decoder and reach the reasoning parser
-# (vLLM Issue #38855). Set ENABLE_THINKING=false to disable globally.
+# (vLLM Issue #38855). The model-orchestrator injects that flag for the Gemma 4
+# routes; direct callers must send it. STREAMING CAVEAT: the gemma4 parser's
+# streaming path matches on decoded text, not token ids, so
+# skip_special_tokens=false is unreliable with stream=true (reasoning may still
+# surface inline in `content`). Set ENABLE_THINKING=false to disable globally.
 ENABLE_THINKING="${ENABLE_THINKING:-true}"
 
 # API

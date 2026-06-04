@@ -134,7 +134,11 @@ For INT4 AWQ on Ada-class hardware, see the
   `gemma4` parser doesn't affect multimodal paths — test separately.
 - **Reasoning extraction requires `"skip_special_tokens": false`** in the
   client request — otherwise `<|channel|>` delimiters are stripped before
-  the gemma4 reasoning parser sees them (vLLM Issue #38855).
+  the gemma4 reasoning parser sees them (vLLM Issue #38855). The
+  `model-orchestrator` injects this for the Gemma 4 routes; direct callers
+  must send it. **Streaming caveat:** #38855 still affects the streaming
+  parser path, so with `stream=true` reasoning may surface inline in
+  `content` — reliable separation is non-streaming only.
 
 ## RunPod deployment
 

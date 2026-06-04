@@ -284,6 +284,7 @@ async def discover_and_rebuild() -> None:
             'proxy': route.get('proxy'),
             'backend_api_key': _route_api_keys.get(i),
             'owned_by': route.get('owned_by'),
+            'request_defaults': route.get('request_defaults') or {},
         }
         upstream_entries = upstream_by_route.get(i, [])
         upstream_by_id: Dict[str, Dict[str, Any]] = {
@@ -487,6 +488,32 @@ def extract_api_key(authorization: Optional[str]) -> Optional[str]:
     return None
 
 # ============ GENERIC PROXY FUNCTION ============
+def apply_request_defaults(payload: Dict[str, Any], defaults: Dict[str, Any]) -> None:
+    """Merge a route's ``request_defaults`` into the outbound payload in place.
+
+    Scalar defaults use ``setdefault`` semantics — a value the client already
+    sent always wins. Dict-valued defaults (e.g. ``chat_template_kwargs``) are
+    shallow-merged so a route can add a key (``enable_thinking``) without
+    dropping keys the client supplied; on a per-key collision the client still
+    wins. A client value of the wrong shape (non-dict where the default is a
+    dict) is left untouched.
+
+    Used for backend quirks that need a per-request field with no server-side
+    default — notably Gemma 4 reasoning, which only separates ``reasoning``
+    from ``content`` when the request carries ``skip_special_tokens: false``.
+    """
+    for key, default_val in defaults.items():
+        if isinstance(default_val, dict):
+            client_val = payload.get(key)
+            if isinstance(client_val, dict):
+                payload[key] = {**default_val, **client_val}
+            elif key not in payload:
+                payload[key] = dict(default_val)
+            # else: client sent a non-dict for a dict-default key — respect it
+        else:
+            payload.setdefault(key, default_val)
+
+
 async def proxy_request(
     method: str,
     route: Dict[str, Any],
@@ -516,6 +543,16 @@ async def proxy_request(
     proxy: Optional[str] = route.get('proxy')
     route_name: str = route['name']
     client = get_client(proxy)
+
+    # Merge any per-route request defaults into the outbound JSON payload
+    # before forwarding — e.g. Gemma 4 needs skip_special_tokens=false so its
+    # reasoning parser can split `reasoning` from `content` (vLLM has no
+    # server-side default for that flag). Client-supplied values win; no-op for
+    # routes without request_defaults and for file uploads (payload is None).
+    if payload is not None:
+        _defaults = route.get('request_defaults')
+        if _defaults:
+            apply_request_defaults(payload, _defaults)
 
     if not backends:
         raise HTTPException(

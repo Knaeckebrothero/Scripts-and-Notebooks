@@ -16,6 +16,25 @@
 set -e
 
 # =============================================================================
+# Persistent caches (volume-mounted)
+# =============================================================================
+# HF_HOME caches the model weight download; VLLM_CONFIG_ROOT caches the JIT
+# torch.compile artifacts. Mount both to a volume to drop cold-boot from
+# ~10 min to ~1-2 min on subsequent starts. Matches the dense images'
+# convention (/mnt/cache) — update the pod's volume mount accordingly.
+#
+# IMPORTANT: invalidate VLLM_CONFIG_ROOT manually whenever the vLLM image is
+# bumped (e.g. v0.22.0 -> v0.22.1) or the model repo is patched on Hugging
+# Face — stale compile graphs cause silent kernel-execution errors.
+export HF_HOME="${HF_HOME:-/mnt/cache/huggingface}"
+export VLLM_CONFIG_ROOT="${VLLM_CONFIG_ROOT:-/mnt/cache/vllm}"
+mkdir -p "${HF_HOME}" "${VLLM_CONFIG_ROOT}"
+
+# Skip the 60s peer-to-peer GPU connectivity probe — irrelevant on single-GPU
+# nodes (the only configuration this image is sized for at TP=1).
+export VLLM_SKIP_P2P_CHECK="${VLLM_SKIP_P2P_CHECK:-1}"
+
+# =============================================================================
 # SSH Server (optional, RunPod tunneling)
 # =============================================================================
 SSH_KEY="${PUBLIC_KEY:-${SSH_PUBLIC_KEY:-}}"
@@ -141,6 +160,22 @@ ENABLE_AUTO_TOOL_CHOICE="${ENABLE_AUTO_TOOL_CHOICE:-true}"
 TOOL_CALL_PARSER="${TOOL_CALL_PARSER:-gemma4}"
 REASONING_PARSER="${REASONING_PARSER:-gemma4}"
 
+# Thinking mode — server-side default activation of Gemma 4's reasoning.
+# Gemma 4 ships with thinking OFF by default, so without this the model emits
+# no <|channel> reasoning for --reasoning-parser gemma4 to extract. This sets
+# the default for every request via --default-chat-template-kwargs.
+#
+# IMPORTANT: enabling thinking server-side is necessary but NOT sufficient for a
+# clean `reasoning` field — vLLM strips the <|channel> delimiters before the
+# parser runs unless the *client* also sends `"skip_special_tokens": false`
+# (vLLM Issue #38855, still open on v0.22.0). The model-orchestrator injects
+# that for the Gemma 4 routes; direct callers must send it themselves.
+# STREAMING CAVEAT: the gemma4 parser's streaming path matches on decoded text,
+# not token ids, so skip_special_tokens=false is unreliable with stream=true —
+# reasoning may still surface inline in `content`. Set ENABLE_THINKING=false to
+# disable thinking globally.
+ENABLE_THINKING="${ENABLE_THINKING:-true}"
+
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8000}"
 API_KEY="${API_KEY:-}"
@@ -185,6 +220,13 @@ fi
 [ -n "${REASONING_PARSER}" ] && CMD="${CMD} --reasoning-parser ${REASONING_PARSER}"
 [ -n "${API_KEY}" ]          && CMD="${CMD} --api-key ${API_KEY}"
 
+# Default thinking on for every request. The JSON carries no spaces so it
+# survives word-splitting under `exec ${CMD}` as a single token — do NOT add
+# surrounding quotes here (they would be passed literally and break parsing).
+if [ "${ENABLE_THINKING}" = "true" ]; then
+    CMD="${CMD} --default-chat-template-kwargs {\"enable_thinking\":true}"
+fi
+
 CMD="${CMD} --trust-remote-code --enable-prompt-tokens-details"
 CMD="${CMD} --uvicorn-log-level ${LOG_LEVEL}"
 CMD="${CMD} $@"
@@ -207,6 +249,9 @@ echo "Prefix caching:    ${ENABLE_PREFIX_CACHING}"
 echo "Chunked prefill:   ${ENABLE_CHUNKED_PREFILL}"
 echo "Tool parser:       ${TOOL_CALL_PARSER}"
 echo "Reasoning parser:  ${REASONING_PARSER}"
+echo "Thinking mode:     ${ENABLE_THINKING}"
+echo "HF_HOME:           ${HF_HOME}"
+echo "VLLM_CONFIG_ROOT:  ${VLLM_CONFIG_ROOT}"
 echo "Endpoint:          http://${HOST}:${PORT}/v1"
 echo "=============================================="
 
