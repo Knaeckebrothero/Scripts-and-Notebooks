@@ -1,0 +1,88 @@
+# vllm-reranker.container — Qwen3-Reranker-8B
+# Place in: ~/.config/containers/systemd/
+#
+# WHY vLLM instead of TEI?
+# Qwen3-Reranker uses generative "yes"/"no" token classification via
+# Qwen3ForSequenceClassification — NOT a standard cross-encoder.
+# TEI explicitly rejects this architecture (GitHub issues #643, #691, #763).
+# Infinity fails too (issue #642). SGLang's /v1/rerank only does standard
+# cross-encoders (issue #7949). vLLM is the only production-ready option.
+#
+# Endpoints:
+#   POST http://localhost:8082/score     (pairwise scoring)
+#   POST http://localhost:8082/v1/rerank (Cohere-compatible rerank API)
+
+[Unit]
+Description=vLLM Qwen3-Reranker-8B
+# Start after TEI containers — TEI uses dynamic allocation so it should
+# claim its memory first. vLLM then claims a fixed portion of total VRAM.
+# With --kv-cache-memory-bytes the order is less critical, but TEI-first
+# is safer: TEI fails fast on OOM, vLLM silently caps at its budget.
+After=network-online.target tei-embedding.service tei-embedding-small.service
+Requires=tei-cache.volume
+
+[Container]
+ContainerName=vllm-reranker
+Image=docker.io/vllm/vllm-openai:latest
+AutoUpdate=registry
+
+# ── GPU (CDI) ────────────────────────────────────────────────────────────────
+AddDevice=nvidia.com/gpu=0
+SecurityLabelDisable=true
+
+# ── Network & Ports ──────────────────────────────────────────────────────────
+Network=tei.network
+PublishPort=8082:8000
+
+# ── Storage ──────────────────────────────────────────────────────────────────
+# Mount shared HF cache; vLLM reads from HF_HOME
+Volume=tei-cache.volume:/root/.cache/huggingface
+# Official Qwen3-Reranker instruction template, applied to /score and /v1/rerank
+Volume=/home/embeddingprod/.config/vllm/qwen3_reranker_score.jinja:/templates/qwen3_reranker_score.jinja:ro
+
+# ── Shared memory ────────────────────────────────────────────────────────────
+# vLLM needs larger shm for IPC; default 64MB is too small
+ShmSize=1g
+
+# ── Model configuration ─────────────────────────────────────────────────────
+# Memory tuning strategy (from research):
+#
+#               Explicitly declare this as a scoring/classification task.
+#
+#   --gpu-memory-utilization 0.40
+#       Caps total GPU claim to ~19.2 GB on a 48 GB L40S.
+#       vLLM docs: "only applies to the current vLLM instance."
+#
+#   --kv-cache-memory-bytes 512M
+#       Directly caps KV cache size, overriding the utilization-based
+#       calculation. For a reranker doing single forward passes with
+#       ≤2048-token inputs, 512 MB is generous.
+#
+#   --max-model-len 2048
+#       Reranking never needs 32K context. Reduces KV cache dimensioning.
+#
+#   --max-num-seqs 4
+#       Limits concurrent sequences, further bounding memory.
+#
+#   --enforce-eager
+#       Skips CUDA graph compilation, saving ~1-2 GB of graph capture memory.
+#       No throughput penalty at our traffic level (50-200 req/day).
+#
+# Result: ~16 GB weights + 0.5 GB KV + 1.5 GB overhead ≈ 18 GB total
+#         Leaves ~30 GB for TEI containers and system overhead.
+#
+# NOTE: JSON is compacted (no spaces) so systemd doesn't word-split it.
+Exec=--model Qwen/Qwen3-Reranker-8B --hf_overrides "{\"architectures\":[\"Qwen3ForSequenceClassification\"],\"classifier_from_token\":[\"no\",\"yes\"],\"is_original_qwen3_reranker\":true}" --dtype float16 --gpu-memory-utilization 0.40 --kv-cache-memory-bytes 512M --max-model-len 2048 --max-num-seqs 4 --enforce-eager --port 8000 --chat-template /templates/qwen3_reranker_score.jinja
+
+# ── Environment ──────────────────────────────────────────────────────────────
+Environment=NVIDIA_VISIBLE_DEVICES=0
+# Disable vLLM usage stats collection
+Environment=VLLM_NO_USAGE_STATS=1
+
+[Service]
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=900
+
+[Install]
+WantedBy=default.target
