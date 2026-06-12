@@ -12,44 +12,18 @@
 # `/v1/models` responses pass upstream metadata (max_model_len, permission,
 # created, root, parent, …) through verbatim when available.
 
-# Server configuration
+# API keys do NOT live in this file. They are stored in Postgres
+# (ROUTER_DATABASE_URL, required) and managed through the Streamlit admin UI
+# (admin_ui/) — each key carries its own rate limit (requests per minute),
+# an optional allowlist of route names, an optional expiry, and an enabled
+# flag. An empty key table means every request is rejected, never anonymous
+# access.
+
+# Server configuration. ROUTER_HOST / ROUTER_PORT env vars override these —
+# used to pin the router to 127.0.0.1 behind the nginx TLS terminator.
 server:
   host: "0.0.0.0"
   port: 8090
-
-# Rate limiting tiers
-tiers:
-  admin:
-    requests_per_minute: 1000
-    burst: 100
-    priority: 1
-    description: "Admin tier - high rate limit"
-  standard:
-    requests_per_minute: 100
-    burst: 20
-    description: "Standard production tier"
-  unlimited:
-    requests_per_minute: 999999
-    burst: 10000
-    priority: 0
-    description: "Unlimited usage - no rate limiting"
-  limited:
-    requests_per_minute: 20
-    burst: 5
-    description: "Limited/development tier"
-
-# API Keys with metadata
-api_keys:
-  - key: "sk-change-me-admin-key"
-    owner: "admin"
-    tier: "admin"
-    enabled: true
-    name: "Admin Key"
-  - key: "sk-change-me-standard-key"
-    owner: "engineering"
-    tier: "standard"
-    enabled: true
-    name: "Production Standard Key"
 
 # Model routing configuration
 routes:
@@ -249,9 +223,3 @@ routes:
   #   models:
   #     - "internal-llm-b"
   #   owned_by: "corp-b"
-
-# Legacy rate limit config (deprecated - use tiers above)
-rate_limit:
-  enabled: false
-  requests_per_minute: 100
-  burst: 20

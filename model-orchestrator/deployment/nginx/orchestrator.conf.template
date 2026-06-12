@@ -1,0 +1,66 @@
+# TLS termination for the model-orchestrator API and the admin UI.
+#
+# This is an nginx *template*: the official nginx image's entrypoint runs
+# envsubst over /etc/nginx/templates/*.template at startup, substituting only
+# variables that are actually defined in the environment — nginx runtime
+# variables ($http_upgrade, $host, ...) pass through untouched.
+#
+#   ROUTER_UPSTREAM   e.g. http://127.0.0.1:8091  (quadlet, host network)
+#                     or   http://router:8090     (compose, bridge network)
+#   UI_UPSTREAM       e.g. http://127.0.0.1:8502  or  http://admin-ui:8501
+#
+# Certificates are mounted at /etc/nginx/certs/server.{crt,key}. The router
+# and the UI themselves speak plain HTTP on loopback/pod-internal addresses
+# only — nothing listens unencrypted on an external interface.
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+# ---- OpenAI-compatible API (public :8090) -------------------------------
+server {
+    listen 8090 ssl;
+    http2 on;
+
+    ssl_certificate     /etc/nginx/certs/server.crt;
+    ssl_certificate_key /etc/nginx/certs/server.key;
+
+    # Audio uploads for /v1/audio/transcriptions
+    client_max_body_size 200m;
+
+    location / {
+        proxy_pass ${ROUTER_UPSTREAM};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+
+        # SSE streaming: chunks must reach the client immediately, and slow
+        # generations must not be killed mid-stream.
+        proxy_buffering off;
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+    }
+}
+
+# ---- Admin UI (public :8501) ---------------------------------------------
+server {
+    listen 8501 ssl;
+
+    ssl_certificate     /etc/nginx/certs/server.crt;
+    ssl_certificate_key /etc/nginx/certs/server.key;
+
+    location / {
+        proxy_pass ${UI_UPSTREAM};
+        proxy_http_version 1.1;
+        # Streamlit runs over a websocket (/_stcore/stream)
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_read_timeout 86400s;
+    }
+}

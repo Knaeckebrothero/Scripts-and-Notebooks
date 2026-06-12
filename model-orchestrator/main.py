@@ -1,9 +1,11 @@
 """
 AI Model Router - OpenAI API-compatible gateway
-Routes requests to 6 backend models based on model field
+Routes requests to backend models based on the request's model field.
 
-Rewritten as transparent pass-through proxy (~300 lines)
-Fixes: reranker crash, dropped fields, auth headers, logging, boilerplate
+Transparent pass-through proxy: bodies are forwarded untouched apart from
+rewriting `model` to the backend's name. Routing comes from the YAML config;
+API keys (per-key rate limit, model allowlist, expiry) live in Postgres and
+are managed via the Streamlit admin UI (see store.py and admin_ui/).
 """
 import os
 import sys
@@ -15,9 +17,12 @@ import logging
 import yaml
 import httpx
 from typing import Dict, Any, List, Optional, Tuple, Union
+from datetime import datetime, timezone
 from contextvars import ContextVar
 from collections import defaultdict
 from contextlib import asynccontextmanager
+
+import store
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -26,7 +31,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 # ============ STRUCTURED LOGGING ============
 # Per-request context propagated via contextvars. A middleware sets a fresh
 # dict on every inbound request; handlers update it as they learn facts
-# (owner, tier, model, backend). A logging filter + custom formatter then
+# (owner, limit, model, backend). A logging filter + custom formatter then
 # surface those fields on every log line without the caller having to thread
 # them explicitly.
 _log_context: ContextVar[Dict[str, str]] = ContextVar("_log_context", default={})
@@ -42,7 +47,7 @@ class _ContextFilter(logging.Filter):
         ctx = _log_context.get()
         record.request_id = ctx.get("request_id", "-")
         record.key_owner = ctx.get("key_owner", "")
-        record.tier = ctx.get("tier", "")
+        record.limit = ctx.get("limit", "")
         record.model = ctx.get("model", "")
         record.backend = ctx.get("backend", "")
         return True
@@ -58,7 +63,7 @@ class _ContextFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         base = super().format(record)
         extras = []
-        for field in ("key_owner", "tier", "model", "backend"):
+        for field in ("key_owner", "limit", "model", "backend"):
             val = getattr(record, field, "")
             if val:
                 name = "owner" if field == "key_owner" else field
@@ -106,6 +111,12 @@ async def lifespan(app: FastAPI):
         f"Router started, {len(http_clients)} httpx client(s) initialized "
         f"(proxies: {sorted(unique_proxies) or 'none'})"
     )
+    await store.init(
+        routes=[
+            (r.get('name', ''), r.get('type', ''))
+            for r in config.get('routes', []) if r.get('name')
+        ],
+    )
     await discover_and_rebuild()
     discovery_task = asyncio.create_task(_discovery_loop())
     try:
@@ -116,47 +127,26 @@ async def lifespan(app: FastAPI):
             await discovery_task
         except asyncio.CancelledError:
             pass
+        await store.close()
         for client in http_clients.values():
             await client.aclose()
         logger.info("Router shutdown complete")
 
 # ============ CONFIGURATION ============
 CONFIG_PATH = os.environ.get("ROUTER_CONFIG", "config.yaml")
-# Optional second YAML file holding only `api_keys:`. Lets k8s deployments put
-# the main config in a ConfigMap and the keys in a Secret; its api_keys list
-# is appended to whatever's in the main config.
-KEYS_CONFIG_PATH = os.environ.get("ROUTER_KEYS_CONFIG")
 
 def load_config() -> Dict[str, Any]:
-    """Load the YAML config at ``ROUTER_CONFIG`` and optionally merge API keys.
+    """Load the YAML config at ``ROUTER_CONFIG`` (default ``config.yaml``).
 
-    The main config (``ROUTER_CONFIG``, default ``config.yaml``) holds
-    ``server``, ``tiers``, ``routes``, and optionally ``api_keys``. If
-    ``ROUTER_KEYS_CONFIG`` is set, that file is loaded as well and its
-    ``api_keys`` list is appended to whatever is already in the main config.
-
-    This split is what lets a Kubernetes deployment keep the routing config
-    in a ConfigMap and the keys in a Secret; Quadlet users can ignore
-    ``ROUTER_KEYS_CONFIG`` and keep everything in one file.
-
-    Returns the merged config dict. Schema reference lives in
-    ``config.example.yaml``.
+    The config holds ``server`` and ``routes`` only — API keys (and their
+    rate limits / model allowlists) live in Postgres, managed through the
+    admin UI. Schema reference lives in ``config.example.yaml``.
     """
     with open(CONFIG_PATH, 'r') as f:
-        cfg = yaml.safe_load(f) or {}
-
-    if KEYS_CONFIG_PATH:
-        with open(KEYS_CONFIG_PATH, 'r') as f:
-            keys_cfg = yaml.safe_load(f) or {}
-        extra_keys = keys_cfg.get('api_keys', [])
-        if extra_keys:
-            cfg.setdefault('api_keys', []).extend(extra_keys)
-            logger.info(f"Merged {len(extra_keys)} api_keys from {KEYS_CONFIG_PATH}")
-
-    return cfg
+        return yaml.safe_load(f) or {}
 
 config = load_config()
-logger.info(f"Config loaded: {len(config.get('routes', []))} routes, {len(config.get('api_keys', []))} API keys")
+logger.info(f"Config loaded: {len(config.get('routes', []))} routes")
 
 
 # ============ LOAD BALANCING ============
@@ -374,45 +364,23 @@ def _enriched_model_entry(model_id: str, route: Dict[str, Any]) -> Dict[str, Any
         "parent": None,
     }
 
-# API keys
-API_KEYS: Dict[str, Dict[str, Any]] = {}
-for api_key_entry in config.get('api_keys', []):
-    key = api_key_entry.get('key', '')
-    if key:
-        API_KEYS[key] = {
-            'owner': api_key_entry.get('owner', 'unknown'),
-            'tier': api_key_entry.get('tier', 'standard'),
-            'enabled': api_key_entry.get('enabled', True),
-            'name': api_key_entry.get('name', 'Unnamed')
-        }
-
-# Refuse to start with an empty key set unless the operator has explicitly
-# opted into anonymous access. `validate_api_key` treats an empty API_KEYS
-# dict as "auth disabled" so a forgotten/misrendered Secret would otherwise
-# silently expose the gateway.
-_ALLOW_ANON = os.environ.get("ROUTER_ALLOW_ANONYMOUS", "").lower() in ("1", "true", "yes")
-if not API_KEYS and not _ALLOW_ANON:
+# API keys live in Postgres (see store.py) — the YAML config only describes
+# server + routes. Refuse to start without a database: there is no YAML
+# fallback for auth, and an empty key table means deny-all, never anonymous.
+if not store.enabled:
     logger.error(
-        "No api_keys configured. Refusing to start: all requests would bypass auth. "
-        "Set ROUTER_ALLOW_ANONYMOUS=1 to explicitly allow this (dev only)."
+        "ROUTER_DATABASE_URL is not set. API keys are managed in Postgres "
+        "(see README and deployment/orchestrator-db.container); the router "
+        "cannot authenticate requests without it."
     )
     sys.exit(1)
-if not API_KEYS and _ALLOW_ANON:
-    logger.warning("ROUTER_ALLOW_ANONYMOUS=1 — auth is disabled, all requests permitted")
 
-# Rate limiting
-TIER_CONFIG = config.get('tiers', {})
+# Rate limiting — in-memory sliding 60s window per key (single instance).
+# The limit itself (requests per minute) comes from the key's DB record.
 rate_limit_tracker: Dict[str, list] = defaultdict(list)
 
-def get_tier_limits(tier: str) -> Dict[str, Any]:
-    return TIER_CONFIG.get(tier, TIER_CONFIG.get('standard', {
-        'requests_per_minute': 100, 'burst': 20, 'priority': 2
-    }))
-
-def check_rate_limit(api_key: str, tier: str) -> tuple[bool, int, int]:
+def check_rate_limit(api_key: str, rpm: int) -> tuple[bool, int, int]:
     """Check if request is within rate limit. Returns (allowed, limit, remaining)."""
-    tier_limits = get_tier_limits(tier)
-    rpm = tier_limits.get('requests_per_minute', 100)
     current_time = time.time()
     window_start = current_time - 60
 
@@ -448,13 +416,25 @@ system_metrics: Dict[str, Any] = {
     'total_requests': 0, 'total_errors': 0, 'uptime_start': time.time()
 }
 
-def record_metrics(api_key: Optional[str], model: str, latency_ms: float, is_error: bool = False):
-    """Record request metrics."""
+def record_metrics(
+    api_key: Optional[str],
+    model: str,
+    latency_ms: float,
+    is_error: bool = False,
+    route_name: Optional[str] = None,
+):
+    """Record in-memory request metrics, and — when ``route_name`` is given —
+    queue one record for the Postgres daily usage aggregate.
+
+    ``route_name`` marks a *terminal* outcome for the request; intermediate
+    failover attempts pass None so each request is counted exactly once in
+    ``usage_daily`` while still showing up in the in-memory error counters.
+    """
     system_metrics['total_requests'] += 1
     if is_error:
         system_metrics['total_errors'] += 1
 
-    if api_key and api_key in key_metrics:
+    if api_key and store.lookup(api_key) is not None:
         key_metrics[api_key]['request_count'] += 1
         if is_error:
             key_metrics[api_key]['error_count'] += 1
@@ -465,27 +445,51 @@ def record_metrics(api_key: Optional[str], model: str, latency_ms: float, is_err
     if is_error:
         model_metrics[model]['error_count'] += 1
 
+    if api_key and route_name:
+        store.record_usage(api_key, route_name, is_error)
+
 # ============ AUTH ============
 def validate_api_key(authorization: Optional[str]) -> tuple[bool, Optional[Dict[str, Any]]]:
-    """Validate API key from Authorization header."""
-    if not API_KEYS:
-        return True, None
-    if not authorization:
+    """Validate the Bearer token against the Postgres-backed key cache.
+
+    Returns ``(is_valid, metadata)``. Invalid covers: missing/malformed
+    header, unknown key, disabled key, and expired key.
+    """
+    if not authorization or not authorization.startswith('Bearer '):
         return False, None
-    if authorization.startswith('Bearer '):
-        token = authorization[7:]
-        if token in API_KEYS:
-            metadata = API_KEYS[token]
-            if not metadata.get('enabled', True):
-                return False, metadata
-            return True, metadata
-    return False, None
+    metadata = store.lookup(authorization[7:])
+    if metadata is None:
+        return False, None
+    if not metadata.get('enabled', True):
+        return False, metadata
+    expires_at = metadata.get('expires_at')
+    if expires_at is not None and expires_at <= datetime.now(timezone.utc):
+        return False, metadata
+    return True, metadata
 
 def extract_api_key(authorization: Optional[str]) -> Optional[str]:
     """Extract raw API key from Authorization header."""
     if authorization and authorization.startswith('Bearer '):
         return authorization[7:]
     return None
+
+def resolve_rpm(metadata: Optional[Dict[str, Any]]) -> int:
+    """Requests-per-minute limit for a key, from its DB record."""
+    return int((metadata or {}).get('rate_limit_rpm', 100))
+
+def check_model_access(metadata: Optional[Dict[str, Any]], route: Dict[str, Any]) -> None:
+    """Raise 403 unless the key's ``allowed_models`` covers this route.
+
+    The allowlist stores route *names* (e.g. ``Qwen3-Reranker-8B``), not
+    model ids — so every alias of a route is covered by one entry. An empty
+    or NULL allowlist means the key may use every route.
+    """
+    allowed = (metadata or {}).get('allowed_models')
+    if allowed and route.get('name') not in allowed:
+        raise HTTPException(
+            status_code=403,
+            detail=f"API key is not allowed to use model route '{route.get('name')}'",
+        )
 
 # ============ GENERIC PROXY FUNCTION ============
 def apply_request_defaults(payload: Dict[str, Any], defaults: Dict[str, Any]) -> None:
@@ -519,7 +523,7 @@ async def proxy_request(
     route: Dict[str, Any],
     api_key: Optional[str],
     model: str,
-    tier: str,
+    rpm: int = 100,
     payload: Optional[Dict[str, Any]] = None,
     files: Optional[Dict] = None,
     data: Optional[Dict] = None,
@@ -534,9 +538,10 @@ async def proxy_request(
     backend unhealthy on ConnectError/TimeoutException/5xx. Streaming
     requests pick one backend with no failover — once bytes start flowing
     there's no safe way to retry. Auth lives outside this function; the
-    per-key rate-limit check here runs after auth has already succeeded in
-    the handler, and is skipped when ``rate_limit=False`` — used by open,
-    unauthenticated discovery calls like ``/v1/audio/voices``.
+    per-key rate-limit check here (limit = ``rpm``, from the key's DB
+    record) runs after auth has already succeeded in the handler, and is
+    skipped when ``rate_limit=False`` — used by open, unauthenticated
+    discovery calls like ``/v1/audio/voices``.
 
     If the route declares a ``proxy:``, the cached httpx client for that
     proxy URL is used; otherwise the direct client.
@@ -572,7 +577,7 @@ async def proxy_request(
     # per-key budget and so return no X-RateLimit-* headers.
     rate_headers: Dict[str, str] = {}
     if rate_limit:
-        allowed, limit, remaining = check_rate_limit(api_key, tier)
+        allowed, limit, remaining = check_rate_limit(api_key, rpm)
         if not allowed:
             raise HTTPException(
                 status_code=429,
@@ -623,7 +628,11 @@ async def proxy_request(
                     headers=headers, timeout=timeout,
                 ) as backend_response:
                     latency_ms = (time.time() - start_time) * 1000
-                    record_metrics(api_key, model, latency_ms, backend_response.status_code != 200)
+                    record_metrics(
+                        api_key, model, latency_ms,
+                        backend_response.status_code != 200,
+                        route_name=route['name'],
+                    )
                     if backend_response.status_code >= 500:
                         mark_unhealthy(backend_host)
                     if backend_response.status_code != 200:
@@ -645,7 +654,7 @@ async def proxy_request(
                             yield chunk
             except (httpx.ConnectError, httpx.TimeoutException) as e:
                 mark_unhealthy(backend_host)
-                record_metrics(api_key, model, 0, is_error=True)
+                record_metrics(api_key, model, 0, is_error=True, route_name=route['name'])
                 err_body = {
                     "error": {"message": f"Backend unavailable: {e}", "type": "api_error"}
                 }
@@ -697,7 +706,11 @@ async def proxy_request(
             last_err = f"{response.status_code} {response.text[:200]}"
             continue
 
-        record_metrics(api_key, model, latency_ms, response.status_code != 200)
+        record_metrics(
+            api_key, model, latency_ms,
+            response.status_code != 200,
+            route_name=route['name'],
+        )
         if response.status_code != 200:
             # 4xx — backend is saying the request is wrong; don't failover.
             raise HTTPException(
@@ -711,7 +724,7 @@ async def proxy_request(
             headers=rate_headers,
         )
 
-    record_metrics(api_key, model, 0, is_error=True)
+    record_metrics(api_key, model, 0, is_error=True, route_name=route['name'])
     raise HTTPException(
         status_code=503,
         detail=f"All backends unavailable: {last_err}",
@@ -884,7 +897,7 @@ async def get_metrics(req: Request):
 
     key_metrics_output = {}
     for api_key, metrics in key_metrics.items():
-        owner = API_KEYS.get(api_key, {}).get('owner', 'unknown')
+        owner = (store.lookup(api_key) or {}).get('owner', 'unknown')
         key_metrics_output[owner] = {
             'request_count': metrics['request_count'],
             'error_count': metrics['error_count'],
@@ -943,20 +956,21 @@ async def chat_completions(req: Request):
     passed through largely untouched; only ``model`` is rewritten to the
     route's ``backend_model_name``. Supports streaming via ``stream: true``.
 
-    Auth: Bearer token required (401 if invalid/disabled).
-    Rate limit: per-tier; exceeds → 429 with X-RateLimit-Reset.
+    Auth: Bearer token required (401 if invalid/disabled/expired).
+    Rate limit: per-key rpm; exceeds → 429 with X-RateLimit-Reset.
     Status codes: 200 on success; 400 on non-chat model or invalid JSON;
-    404 on unknown model; 429 on rate limit; 5xx on backend failure.
+    403 on model not allowed for this key; 404 on unknown model;
+    429 on rate limit; 5xx on backend failure.
     """
     auth_header = req.headers.get("authorization")
     is_valid, key_metadata = validate_api_key(auth_header)
     if not is_valid:
-        raise HTTPException(status_code=401, detail="Invalid or disabled API key")
+        raise HTTPException(status_code=401, detail="Invalid, disabled, or expired API key")
 
-    tier = key_metadata.get('tier', 'standard') if key_metadata else 'standard'
     owner = key_metadata.get('owner') if key_metadata else 'unknown'
+    rpm = resolve_rpm(key_metadata)
     api_key = extract_api_key(auth_header)
-    set_log_context(key_owner=owner, tier=tier)
+    set_log_context(key_owner=owner, limit=f"{rpm}rpm")
 
     # Read raw body and extract model/stream (Bug 2 fix: pass-through)
     body = await req.body()
@@ -973,6 +987,7 @@ async def chat_completions(req: Request):
     if route['type'] not in ['chat', 'vision']:
         raise HTTPException(status_code=400, detail=f"Model '{model}' is not a chat model")
 
+    check_model_access(key_metadata, route)
     payload['model'] = route.get('effective_backend_name', model)
 
     stream = payload.get('stream', False)
@@ -985,7 +1000,7 @@ async def chat_completions(req: Request):
         route=route,
         api_key=api_key,
         model=model,
-        tier=tier,
+        rpm=rpm,
         payload=payload,
         stream=stream,
     )
@@ -994,20 +1009,21 @@ async def chat_completions(req: Request):
 async def embeddings(req: Request):
     """Proxy OpenAI-style embedding requests to the backend for the requested model.
 
-    Auth: Bearer token required (401 if invalid/disabled).
-    Rate limit: per-tier; exceeds → 429.
+    Auth: Bearer token required (401 if invalid/disabled/expired).
+    Rate limit: per-key rpm; exceeds → 429.
     Status codes: 200 on success; 400 on non-embedding model or invalid JSON;
-    404 on unknown model; 429 on rate limit; 5xx on backend failure.
+    403 on model not allowed for this key; 404 on unknown model;
+    429 on rate limit; 5xx on backend failure.
     """
     auth_header = req.headers.get("authorization")
     is_valid, key_metadata = validate_api_key(auth_header)
     if not is_valid:
-        raise HTTPException(status_code=401, detail="Invalid or disabled API key")
+        raise HTTPException(status_code=401, detail="Invalid, disabled, or expired API key")
 
-    tier = key_metadata.get('tier', 'standard') if key_metadata else 'standard'
     owner = key_metadata.get('owner') if key_metadata else 'unknown'
+    rpm = resolve_rpm(key_metadata)
     api_key = extract_api_key(auth_header)
-    set_log_context(key_owner=owner, tier=tier)
+    set_log_context(key_owner=owner, limit=f"{rpm}rpm")
 
     body = await req.body()
     try:
@@ -1023,6 +1039,7 @@ async def embeddings(req: Request):
     if route['type'] != 'embedding':
         raise HTTPException(status_code=400, detail=f"Model '{model}' is not an embedding model")
 
+    check_model_access(key_metadata, route)
     payload['model'] = route.get('effective_backend_name', model)
     set_log_context(model=model)
 
@@ -1033,7 +1050,7 @@ async def embeddings(req: Request):
         route=route,
         api_key=api_key,
         model=model,
-        tier=tier,
+        rpm=rpm,
         payload=payload,
         timeout=60.0,
     )
@@ -1045,20 +1062,21 @@ async def rerank(req: Request):
     Strips ``top_n`` from the payload before forwarding (some backends crash
     when it's passed as ``null``).
 
-    Auth: Bearer token required (401 if invalid/disabled).
-    Rate limit: per-tier; exceeds → 429.
+    Auth: Bearer token required (401 if invalid/disabled/expired).
+    Rate limit: per-key rpm; exceeds → 429.
     Status codes: 200 on success; 400 on non-reranker model or invalid JSON;
-    404 on unknown model; 429 on rate limit; 5xx on backend failure.
+    403 on model not allowed for this key; 404 on unknown model;
+    429 on rate limit; 5xx on backend failure.
     """
     auth_header = req.headers.get("authorization")
     is_valid, key_metadata = validate_api_key(auth_header)
     if not is_valid:
-        raise HTTPException(status_code=401, detail="Invalid or disabled API key")
+        raise HTTPException(status_code=401, detail="Invalid, disabled, or expired API key")
 
-    tier = key_metadata.get('tier', 'standard') if key_metadata else 'standard'
     owner = key_metadata.get('owner') if key_metadata else 'unknown'
+    rpm = resolve_rpm(key_metadata)
     api_key = extract_api_key(auth_header)
-    set_log_context(key_owner=owner, tier=tier)
+    set_log_context(key_owner=owner, limit=f"{rpm}rpm")
 
     body = await req.body()
     try:
@@ -1074,6 +1092,7 @@ async def rerank(req: Request):
     if route['type'] != 'reranker':
         raise HTTPException(status_code=400, detail=f"Model '{model}' is not a reranker model")
 
+    check_model_access(key_metadata, route)
     payload['model'] = route.get('effective_backend_name', model)
     # Remove top_n if present to prevent crash (pop is safe - no KeyError)
     payload.pop('top_n', None)
@@ -1087,7 +1106,7 @@ async def rerank(req: Request):
         route=route,
         api_key=api_key,
         model=model,
-        tier=tier,
+        rpm=rpm,
         payload=payload,
         timeout=60.0,
     )
@@ -1100,20 +1119,21 @@ async def audio_transcriptions(req: Request):
     is rewritten to the route's ``backend_model_name``. Defaults to
     ``whisper-large-v3-turbo`` when no model is specified.
 
-    Auth: Bearer token required (401 if invalid/disabled).
-    Rate limit: per-tier; exceeds → 429.
-    Status codes: 200 on success; 400 on non-STT model; 404 on unknown model;
-    429 on rate limit; 5xx on backend failure.
+    Auth: Bearer token required (401 if invalid/disabled/expired).
+    Rate limit: per-key rpm; exceeds → 429.
+    Status codes: 200 on success; 400 on non-STT model; 403 on model not
+    allowed for this key; 404 on unknown model; 429 on rate limit;
+    5xx on backend failure.
     """
     auth_header = req.headers.get("authorization")
     is_valid, key_metadata = validate_api_key(auth_header)
     if not is_valid:
-        raise HTTPException(status_code=401, detail="Invalid or disabled API key")
+        raise HTTPException(status_code=401, detail="Invalid, disabled, or expired API key")
 
-    tier = key_metadata.get('tier', 'standard') if key_metadata else 'standard'
     owner = key_metadata.get('owner') if key_metadata else 'unknown'
+    rpm = resolve_rpm(key_metadata)
     api_key = extract_api_key(auth_header)
-    set_log_context(key_owner=owner, tier=tier)
+    set_log_context(key_owner=owner, limit=f"{rpm}rpm")
 
     form = await req.form()
     model_name = form.get("model", "whisper-large-v3-turbo")
@@ -1125,6 +1145,7 @@ async def audio_transcriptions(req: Request):
     if route['type'] != 'stt':
         raise HTTPException(status_code=400, detail=f"Model '{model_name}' is not a speech-to-text model")
 
+    check_model_access(key_metadata, route)
     file = form.get("file")
     file_bytes = await file.read()
     filename = file.filename or "audio.wav"
@@ -1143,7 +1164,7 @@ async def audio_transcriptions(req: Request):
         route=route,
         api_key=api_key,
         model=model_name,
-        tier=tier,
+        rpm=rpm,
         files=files,
         data=data,
         timeout=300.0,
@@ -1153,21 +1174,21 @@ async def audio_transcriptions(req: Request):
 async def audio_speech(req: Request):
     """Proxy OpenAI-style text-to-speech requests to the backend for the requested model.
 
-    Auth: Bearer token required (401 if invalid/disabled).
-    Rate limit: per-tier; exceeds → 429.
+    Auth: Bearer token required (401 if invalid/disabled/expired).
+    Rate limit: per-key rpm; exceeds → 429.
     Status codes: 200 on success (audio bytes in response body); 400 on
-    non-TTS model or invalid JSON; 404 on unknown model; 429 on rate limit;
-    5xx on backend failure.
+    non-TTS model or invalid JSON; 403 on model not allowed for this key;
+    404 on unknown model; 429 on rate limit; 5xx on backend failure.
     """
     auth_header = req.headers.get("authorization")
     is_valid, key_metadata = validate_api_key(auth_header)
     if not is_valid:
-        raise HTTPException(status_code=401, detail="Invalid or disabled API key")
+        raise HTTPException(status_code=401, detail="Invalid, disabled, or expired API key")
 
-    tier = key_metadata.get('tier', 'standard') if key_metadata else 'standard'
     owner = key_metadata.get('owner') if key_metadata else 'unknown'
+    rpm = resolve_rpm(key_metadata)
     api_key = extract_api_key(auth_header)
-    set_log_context(key_owner=owner, tier=tier)
+    set_log_context(key_owner=owner, limit=f"{rpm}rpm")
 
     body = await req.body()
     try:
@@ -1183,6 +1204,7 @@ async def audio_speech(req: Request):
     if route['type'] != 'tts':
         raise HTTPException(status_code=400, detail=f"Model '{model}' is not a text-to-speech model")
 
+    check_model_access(key_metadata, route)
     payload['model'] = route.get('effective_backend_name', model)
     set_log_context(model=model)
 
@@ -1193,7 +1215,7 @@ async def audio_speech(req: Request):
         route=route,
         api_key=api_key,
         model=model,
-        tier=tier,
+        rpm=rpm,
         payload=payload,
         timeout=60.0,
     )
@@ -1235,7 +1257,6 @@ async def audio_voices(model: Optional[str] = None):
         route=route,
         api_key=None,
         model=model,
-        tier="standard",
         endpoint_override="/v1/audio/voices",
         rate_limit=False,
         timeout=30.0,
@@ -1244,7 +1265,9 @@ async def audio_voices(model: Optional[str] = None):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("ROUTER_PORT", "8090"))
-    # Bind to specific IP (Bug 3 fix: config not read - now reads from config)
-    host = config.get('server', {}).get('host', '0.0.0.0')
+    # ROUTER_HOST env wins over the config file — lets the quadlet pin the
+    # router to 127.0.0.1 behind the nginx TLS terminator without a second
+    # config file, while k8s keeps 0.0.0.0 from the ConfigMap.
+    host = os.environ.get("ROUTER_HOST") or config.get('server', {}).get('host', '0.0.0.0')
     logger.info(f"Starting server on {host}:{port}")
     uvicorn.run(app, host=host, port=port)

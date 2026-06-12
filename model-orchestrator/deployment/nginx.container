@@ -1,0 +1,44 @@
+# nginx.container — TLS termination in front of the router and the admin UI
+#
+# Listens on the public ports (8090 API, 8501 UI) with the university-CA
+# certificate and proxies to the loopback-only services:
+#   :8090 https  ->  127.0.0.1:8091  (router,   ROUTER_HOST=127.0.0.1)
+#   :8501 https  ->  127.0.0.1:8502  (admin UI, STREAMLIT_SERVER_ADDRESS=127.0.0.1)
+#
+# Expects on the host:
+#   ~/.config/model-orchestrator/nginx/orchestrator.conf.template  (from deployment/nginx/)
+#   ~/.config/model-orchestrator/certs/server.crt                  (issued cert)
+#   ~/.config/model-orchestrator/certs/server.key                  (chmod 600)
+[Unit]
+Description=nginx TLS termination for model-orchestrator + admin UI
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=orchestrator-nginx
+Image=docker.io/library/nginx:1.27-alpine
+Network=host
+
+# The entrypoint envsubsts *.template into /etc/nginx/conf.d/ at startup.
+Volume=%h/.config/model-orchestrator/nginx/orchestrator.conf.template:/etc/nginx/templates/default.conf.template:ro,z
+Volume=%h/.config/model-orchestrator/certs:/etc/nginx/certs:ro,z
+
+Environment=ROUTER_UPSTREAM=http://127.0.0.1:8091
+Environment=UI_UPSTREAM=http://127.0.0.1:8502
+
+# busybox wget (TLS-capable in alpine); cert CN won't match 127.0.0.1, hence
+# --no-check-certificate — this only probes that TLS termination is up.
+HealthCmd=/bin/sh -c "wget -q -O /dev/null --no-check-certificate https://127.0.0.1:8090/livez"
+HealthInterval=30s
+HealthTimeout=5s
+HealthStartPeriod=10s
+HealthRetries=3
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

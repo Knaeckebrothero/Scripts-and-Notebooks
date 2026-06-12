@@ -1,0 +1,34 @@
+# admin-ui.container — Streamlit UI for API key management + usage monitoring
+#
+# Binds to 127.0.0.1:8502; the nginx unit terminates TLS on the public :8501
+# and proxies here (websocket upgrade included — Streamlit needs it).
+# Credentials + DSN live in ~/.config/model-orchestrator/admin-ui.env
+# (chmod 600), see admin-ui.env.example next to this file.
+[Unit]
+Description=Model Orchestrator admin UI (Streamlit)
+After=network-online.target orchestrator-db.service
+Wants=network-online.target
+
+[Container]
+ContainerName=orchestrator-admin-ui
+Image=ghcr.io/knaeckebrothero/model-orchestrator-admin-ui:latest
+Network=host
+
+EnvironmentFile=%h/.config/model-orchestrator/admin-ui.env
+Environment=STREAMLIT_SERVER_ADDRESS=127.0.0.1
+Environment=STREAMLIT_SERVER_PORT=8502
+
+HealthCmd=python -c "import sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8502/_stcore/health', timeout=5); sys.exit(0 if r.status==200 else 1)"
+HealthInterval=30s
+HealthTimeout=10s
+HealthStartPeriod=15s
+HealthRetries=3
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

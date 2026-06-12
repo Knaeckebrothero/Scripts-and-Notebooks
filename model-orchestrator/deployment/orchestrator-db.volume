@@ -1,0 +1,10 @@
+[Unit]
+Description=Postgres data volume for model-orchestrator
+
+[Volume]
+Driver=local
+DriverOpts=type=volume,opt=name=orchestrator-db
+
+# Labels for management
+Label=app=model-orchestrator
+Label=component=database

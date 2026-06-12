@@ -1,0 +1,41 @@
+# orchestrator-db.container — Postgres backing the model-orchestrator
+#
+# Holds the API keys (hashed) and the daily usage aggregates; the router
+# creates and migrates its own tables on startup, the admin UI reads/writes
+# the same database. Loopback-only: with Network=host the listen_addresses
+# override below keeps it off the external interfaces.
+#
+# Credentials live in ~/.config/model-orchestrator/db.env (chmod 600), see
+# db.env.example next to this file.
+[Unit]
+Description=Postgres for model-orchestrator (API keys + usage)
+After=network-online.target
+Wants=network-online.target
+
+[Container]
+ContainerName=orchestrator-db
+# Pinned major version — Postgres data dirs don't survive major upgrades
+# without pg_upgrade, so never run this on :latest.
+Image=docker.io/library/postgres:17
+Network=host
+
+Exec=postgres -c listen_addresses=127.0.0.1
+
+EnvironmentFile=%h/.config/model-orchestrator/db.env
+
+Volume=orchestrator-db.volume:/var/lib/postgresql/data
+
+HealthCmd=/bin/sh -c "pg_isready -q -h 127.0.0.1 -U $POSTGRES_USER -d $POSTGRES_DB"
+HealthInterval=30s
+HealthTimeout=5s
+HealthStartPeriod=20s
+HealthRetries=3
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=120
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

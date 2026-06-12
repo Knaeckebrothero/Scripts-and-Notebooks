@@ -184,3 +184,7 @@ target/
 !.mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/
+
+# TLS material (never commit) — university CA certs + local dev certs
+Uni_CA_Certs/
+model-orchestrator/certs/

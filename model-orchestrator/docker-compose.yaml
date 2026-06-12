@@ -1,0 +1,75 @@
+# Local dev/test stack: Postgres + router + admin UI + nginx TLS termination.
+# Mirrors the production quadlet layout (deployment/*.container) on a bridge
+# network. Works with `docker compose up --build` or `podman-compose up --build`.
+#
+# TLS needs a cert pair in ./certs (gitignored). Self-signed for local use:
+#   mkdir -p certs && openssl req -x509 -newkey rsa:2048 -nodes \
+#     -keyout certs/server.key -out certs/server.crt -days 365 \
+#     -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+#
+# Then:
+#   https://localhost:8090/v1/models   (API — empty key table rejects auth'd
+#                                       calls until a key is created in the UI)
+#   https://localhost:8501             (admin UI, admin/admin)
+#
+# The example config's backends point at 127.0.0.1 ports that don't exist in
+# this network — fine for exercising auth/keys/usage; mount a real config
+# over /app/config.yaml to test against live backends.
+
+services:
+  db:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_DB: orchestrator
+      POSTGRES_USER: orchestrator
+      POSTGRES_PASSWORD: orchestrator
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -h 127.0.0.1 -U orchestrator -d orchestrator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "127.0.0.1:5432:5432"   # convenience: psql from the host
+
+  router:
+    build: .
+    environment:
+      ROUTER_DATABASE_URL: postgresql://orchestrator:orchestrator@db:5432/orchestrator
+      ROUTER_LOG_LEVEL: DEBUG
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8091:8090"   # plain-HTTP side door for debugging
+
+  admin-ui:
+    build: ./admin_ui
+    environment:
+      DATABASE_URL: postgresql://orchestrator:orchestrator@db:5432/orchestrator
+      UI_ADMIN_USER: admin
+      UI_ADMIN_PASSWORD: admin
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8502:8501"   # plain-HTTP side door for debugging
+
+  nginx:
+    image: docker.io/library/nginx:1.27-alpine
+    volumes:
+      - ./deployment/nginx/orchestrator.conf.template:/etc/nginx/templates/default.conf.template:ro
+      - ./certs:/etc/nginx/certs:ro
+    environment:
+      ROUTER_UPSTREAM: http://router:8090
+      UI_UPSTREAM: http://admin-ui:8501
+    depends_on:
+      - router
+      - admin-ui
+    ports:
+      - "8090:8090"
+      - "8501:8501"
+
+volumes:
+  db-data:

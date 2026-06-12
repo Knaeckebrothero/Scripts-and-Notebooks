@@ -1,29 +1,43 @@
+# model-orchestrator.container — OpenAI API-compatible gateway
+#
+# Runs loopback-only on 127.0.0.1:8091; the nginx unit (nginx.container)
+# terminates TLS on the public :8090 and proxies here. Requires Postgres
+# (orchestrator-db.container) — API keys and usage live there, managed via
+# the admin UI (admin-ui.container).
 [Unit]
 Description=Model Orchestrator - OpenAI API-compatible gateway
-After=network.target
+After=network-online.target orchestrator-db.service
+Wants=network-online.target
 
 [Container]
 ContainerName=model-orchestrator
-Image=localhost/model-orchestrator:latest
+Image=ghcr.io/knaeckebrothero/model-orchestrator:latest
 Network=host
 
-# Volume mounts for persistent config
-Volume=%h/.config/model-orchestrator/config.yaml:/app/config.yaml:ro
+# Read-only bind mount of the YAML config (server + routes; no keys in YAML)
+Volume=%h/.config/model-orchestrator/config.yaml:/app/config.yaml:ro,z
 
-# Environment variables
-Environment=ROUTER_PORT=8090
+# ROUTER_DATABASE_URL lives in router.env (chmod 600, see router.env.example)
+EnvironmentFile=%h/.config/model-orchestrator/router.env
+# Loopback-only behind the nginx TLS terminator, which owns the public :8090.
+Environment=ROUTER_HOST=127.0.0.1
+Environment=ROUTER_PORT=8091
 Environment=ROUTER_CONFIG=/app/config.yaml
+Environment=ROUTER_LOG_LEVEL=INFO
 
-# Health check
-HealthCheckCmd=/bin/sh -c "curl -f http://localhost:8090/health || exit 1"
-HealthCheckInterval=30s
-HealthCheckTimeout=10s
-HealthCheckStartPeriod=10s
-HealthCheckRetries=3
+# Use python+urllib (always present in the image, unlike curl) so podman can
+# actually run the probe. Exits 0 on HTTP 200, non-zero otherwise.
+HealthCmd=python -c "import sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=5); sys.exit(0 if r.status==200 else 1)"
+HealthInterval=30s
+HealthTimeout=10s
+HealthStartPeriod=15s
+HealthRetries=3
 
-# Resource limits
-Memory=2G
-CPUs=2
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=120
+TimeoutStopSec=30
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

@@ -29,8 +29,13 @@ spec:
               value: "8090"
             - name: ROUTER_CONFIG
               value: "/app/config.yaml"
-            - name: ROUTER_KEYS_CONFIG
-              value: "/app/keys.yaml"
+            # API keys + usage live in Postgres (required). Point this at a
+            # reachable instance; the router creates its own tables.
+            - name: ROUTER_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: model-orchestrator-keys
+                  key: database-url
           ports:
             - name: http
               containerPort: 8090
@@ -39,10 +44,6 @@ spec:
             - name: config
               mountPath: /app/config.yaml
               subPath: config.yaml
-              readOnly: true
-            - name: keys
-              mountPath: /app/keys.yaml
-              subPath: keys.yaml
               readOnly: true
           livenessProbe:
             httpGet:
@@ -140,9 +141,6 @@ spec:
         - name: config
           configMap:
             name: model-orchestrator-config
-        - name: keys
-          secret:
-            secretName: model-orchestrator-keys
         - name: dev-ppp
           hostPath:
             path: /dev/ppp

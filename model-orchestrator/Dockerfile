@@ -34,6 +34,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 # the example as the default /app/config.yaml. The Quadlet unit (and the k8s
 # manifests) mount a real config over it at runtime.
 COPY main.py /app/main.py
+COPY store.py /app/store.py
 COPY config.example.yaml /app/config.yaml
 
 # Create directory for logs

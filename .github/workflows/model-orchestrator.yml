@@ -1,13 +1,14 @@
 name: model-orchestrator
 
-# Build and push the AI Model Router image to GHCR.
+# Build and push the AI Model Router image and its Streamlit admin UI to GHCR.
 #
 # Triggers:
 #   - push to main when files under model-orchestrator/ (or this workflow) change
 #   - manual workflow_dispatch (always builds)
 #
-# Image:
+# Images:
 #   ghcr.io/knaeckebrothero/model-orchestrator
+#   ghcr.io/knaeckebrothero/model-orchestrator-admin-ui
 #
 # Tags:
 #   - sha-<short>   always
@@ -27,7 +28,6 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: knaeckebrothero/model-orchestrator
 
 jobs:
   build:
@@ -36,6 +36,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: knaeckebrothero/model-orchestrator
+            context: ./model-orchestrator
+            file: ./model-orchestrator/Dockerfile
+          - image: knaeckebrothero/model-orchestrator-admin-ui
+            context: ./model-orchestrator/admin_ui
+            file: ./model-orchestrator/admin_ui/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -55,7 +65,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.REGISTRY }}/${{ matrix.image }}
           tags: |
             type=sha,format=short,prefix=sha-
             type=raw,value=latest,enable={{is_default_branch}}
@@ -63,11 +73,11 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
-          context: ./model-orchestrator
-          file: ./model-orchestrator/Dockerfile
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: false
-          cache-from: type=gha,ignore-error=true
-          cache-to: type=gha,mode=min,ignore-error=true
+          cache-from: type=gha,scope=${{ matrix.image }},ignore-error=true
+          cache-to: type=gha,mode=min,scope=${{ matrix.image }},ignore-error=true
