@@ -361,6 +361,12 @@ compose (service-name upstreams) layouts. SSE streaming has
 `proxy_buffering off` and long read timeouts; don't drop those when
 editing. Certificates mount at `/etc/nginx/certs/server.{crt,key}`.
 
+When the UI is reached at anything other than localhost, set
+`STREAMLIT_BROWSER_SERVER_ADDRESS` to that public address (see
+`admin-ui.env.example`): Streamlit's CORS check rejects websocket
+upgrades from unknown origins, which presents as the page shell loading
+and then hanging on the splash screen forever (403 on `/_stcore/stream`).
+
 Heads-up for IP-only certificates: modern clients require a
 `subjectAltName` (CN-only matching is widely rejected, especially for IP
 hosts). If verification fails against a CA-issued cert, ask for a reissue
