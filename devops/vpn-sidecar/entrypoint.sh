@@ -36,6 +36,15 @@ VPNEOF
         echo "ca-file = /etc/vpn/certs/ca.crt" >> "$VPN_CONFIG"
         echo "[vpn] Using CA certificate from /etc/vpn/certs/ca.crt"
     fi
+    # VPN_SET_DNS=0 keeps the sidecar from touching the shared netns DNS:
+    # openfortivpn won't edit /etc/resolv.conf and pppd won't request peer
+    # DNS. Required when sharing a pod network namespace whose other
+    # containers depend on cluster DNS. Default 1 = unchanged behavior.
+    if [ "${VPN_SET_DNS:-1}" = "0" ]; then
+        echo "set-dns = 0" >> "$VPN_CONFIG"
+        echo "pppd-use-peerdns = 0" >> "$VPN_CONFIG"
+        echo "[vpn] DNS injection disabled (VPN_SET_DNS=0)"
+    fi
     chmod 600 "$VPN_CONFIG"
     echo "[vpn] Config generated for ${VPN_HOST}:${VPN_PORT:-443}${VPN_REALM:+ realm=${VPN_REALM}}"
 fi
