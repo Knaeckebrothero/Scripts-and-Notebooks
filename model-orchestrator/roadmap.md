@@ -29,8 +29,10 @@ they become actionable.
 Deployed 2026-06-12 and measured: `curl` accepts the chain (legacy CN
 fallback), but **no Python client can verify it** —
 
-- the leaf (`CN=10.18.2.105`) has no `subjectAltName`, and OpenSSL never
-  falls back to CN for IP hosts → "IP address mismatch" on every Python;
+- the leaf (`CN=10.18.2.105`) is an **X.509 v1** certificate — the
+  pre-extensions format, so it *cannot* carry a `subjectAltName` (typical
+  of `openssl x509 -req` without `-extfile`); OpenSSL never falls back to
+  CN for IP hosts → "IP address mismatch" on every Python;
 - the CA cert lacks a `keyUsage` extension, which Python ≥ 3.13 rejects
   outright (`VERIFY_X509_STRICT` default).
 
