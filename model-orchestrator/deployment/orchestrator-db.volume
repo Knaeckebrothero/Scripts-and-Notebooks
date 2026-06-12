@@ -1,10 +1,12 @@
 [Unit]
 Description=Postgres data volume for model-orchestrator
 
+# Note: quadlet [Volume] has no DriverOpts key (unknown keys make the
+# generator drop the unit entirely — the container unit then fails with
+# "Unit orchestrator-db-volume.service not found"). VolumeName needs
+# podman >= 5.0; on older podman just remove it and accept the
+# auto-generated "systemd-orchestrator-db" volume name.
 [Volume]
-Driver=local
-DriverOpts=type=volume,opt=name=orchestrator-db
-
-# Labels for management
+VolumeName=orchestrator-db
 Label=app=model-orchestrator
 Label=component=database

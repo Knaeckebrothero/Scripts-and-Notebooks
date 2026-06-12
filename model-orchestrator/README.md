@@ -364,7 +364,13 @@ editing. Certificates mount at `/etc/nginx/certs/server.{crt,key}`.
 Heads-up for IP-only certificates: modern clients require a
 `subjectAltName` (CN-only matching is widely rejected, especially for IP
 hosts). If verification fails against a CA-issued cert, ask for a reissue
-with `SAN: IP:<address>`.
+with `SAN: IP:<address>`. Measured against a SAN-less leaf: `curl` still
+accepts (its own legacy CN fallback), but Python/OpenSSL rejects with
+"IP address mismatch" on every version — and Python ≥3.13 additionally
+rejects the whole chain earlier if the *CA* certificate lacks a
+`keyUsage` extension (`VERIFY_X509_STRICT` is on by default there). So a
+private CA needs `keyUsage = keyCertSign, cRLSign` on the CA cert and
+`subjectAltName` on the leaf before Python clients can verify.
 
 ## Local development (docker compose)
 

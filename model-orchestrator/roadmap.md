@@ -24,16 +24,21 @@ they become actionable.
 
 ## Near-term
 
-### 1. Deploy the DB + UI + nginx stack on the university server
+### 1. Get the university TLS certs reissued
 
-- Bring up `orchestrator-db`, migrate the existing keys (SQL inserts that
-  hash the current key values, so clients keep working), switch the router
-  quadlet to loopback :8091 + `ROUTER_DATABASE_URL`, add `admin-ui` and
-  `nginx` units with the university CA certs, flip clients to
-  `https://…:8090`.
-- Watch out: the issued cert has no subjectAltName (CN=10.18.2.105 only) —
-  many clients reject that, especially for IP hosts. If verification fails,
-  request a reissue with `SAN: IP:10.18.2.105`.
+Deployed 2026-06-12 and measured: `curl` accepts the chain (legacy CN
+fallback), but **no Python client can verify it** —
+
+- the leaf (`CN=10.18.2.105`) has no `subjectAltName`, and OpenSSL never
+  falls back to CN for IP hosts → "IP address mismatch" on every Python;
+- the CA cert lacks a `keyUsage` extension, which Python ≥ 3.13 rejects
+  outright (`VERIFY_X509_STRICT` default).
+
+Ask the cert issuer (jfink@fra-uas.de per the cert subject) for: leaf
+reissued with `subjectAltName = IP:10.18.2.105`, and the CA cert re-signed
+with `keyUsage = critical, keyCertSign, cRLSign` (same keypair keeps the
+existing trust imports valid). Until then Python users need
+`verify=False` or a custom SSL context.
 
 ### 2. Prometheus + Grafana
 
@@ -72,6 +77,16 @@ Observability beyond the admin UI's daily aggregates.
 
 ## Done (kept for context)
 
+- **2026-06-12: full stack live on the university server** under the
+  recreated `routerprod` account (the old UID-985 one was deleted first):
+  orchestrator-db on loopback :5433 (5432 belongs to fessi-postgres),
+  router loopback :8091, admin UI loopback :8502, nginx TLS on public
+  :8090/:8501 (firewall opened for 8501). llmprod's old router quadlet
+  retired to `~/quadlet-retired/`; YAML keys are dead, keys live in
+  Postgres only. Verified end-to-end over HTTPS: chat, embeddings,
+  TTS→STT roundtrip, 401s for old/no keys, usage_daily rows, plain-HTTP
+  → 400. Quadlet gotcha fixed along the way: `DriverOpts` is not a valid
+  `[Volume]` key (generator drops the unit) — use `VolumeName`.
 - VPN sidecar wiring (SOCKS5 + TCP-forward patterns, multi-tunnel support).
 - Kubernetes manifest set under `deployment/kubernetes/`.
 - Cleanup: structured logging, OpenAI error envelopes, handler docstrings.
