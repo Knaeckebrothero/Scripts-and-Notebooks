@@ -409,6 +409,17 @@ Example route with two backends:
 
 ## Observability
 
+- **Health endpoints** — `GET /livez` is the cheap liveness probe (process
+  up, nothing else); point container healthchecks and kubelet probes at it.
+  `GET /health` is the operator view: pings Postgres and probes every
+  configured backend in parallel, returning per-backend status plus a
+  `database` block (cached key count, seconds since the last key refresh,
+  usage-queue depth). Top-level `status` is `healthy` or `degraded` —
+  degraded means the DB is unreachable and the router is serving auth from
+  its cached key set (key changes frozen, usage records dropped). `/health`
+  always answers HTTP 200: restarting the container on a DB blip would be
+  wrong, since startup requires the database while a running router
+  survives the outage on its cache.
 - **Request IDs** — every response carries `X-Request-ID`. The router honours
   an incoming `X-Request-ID` header if the caller sets one, otherwise
   generates a short id. Logs emitted during the request include the id.

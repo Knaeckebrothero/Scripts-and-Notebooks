@@ -81,6 +81,7 @@ _keys_by_hash: Dict[str, Dict[str, Any]] = {}
 _usage_queue: "asyncio.Queue[Tuple[int, str, str, int]]" = asyncio.Queue(maxsize=10000)
 _last_used_written: Dict[int, float] = {}
 _tasks: List[asyncio.Task] = []
+_last_refresh_at: Optional[float] = None  # monotonic time of last successful key load
 _LAST_USED_MIN_INTERVAL = 60.0  # seconds between last_used_at writes per key
 
 
@@ -168,7 +169,7 @@ async def _sync_routes(conn, routes: List[Tuple[str, str]]) -> None:
 
 async def _load_keys() -> None:
     """Replace the in-memory key cache from the api_keys table."""
-    global _keys_by_hash
+    global _keys_by_hash, _last_refresh_at
     async with _pool.connection() as conn:
         cur = await conn.execute(
             """
@@ -195,6 +196,7 @@ async def _load_keys() -> None:
     if len(new_cache) != len(_keys_by_hash):
         logger.info(f"key store: key set changed, {len(new_cache)} key(s) active")
     _keys_by_hash = new_cache
+    _last_refresh_at = time.monotonic()
 
 
 async def _refresh_loop() -> None:
@@ -206,6 +208,40 @@ async def _refresh_loop() -> None:
             raise
         except Exception as e:
             logger.warning(f"key store: refresh failed, keeping last known keys: {e}")
+
+
+async def health(timeout: float = 2.0) -> Dict[str, Any]:
+    """Ping Postgres and report key-store state, for the /health endpoint.
+
+    Never raises. ``status`` is ``healthy`` or ``unavailable`` — the router
+    keeps authenticating from the cached key set either way, so an
+    unavailable database means *degraded* (usage writes dropped, key
+    changes frozen), not down. ``seconds_since_key_refresh`` growing far
+    beyond ROUTER_KEYS_REFRESH_SECONDS is the staleness signal.
+    """
+    info: Dict[str, Any] = {
+        "keys_loaded": len(_keys_by_hash),
+        "seconds_since_key_refresh": (
+            round(time.monotonic() - _last_refresh_at, 1)
+            if _last_refresh_at is not None
+            else None
+        ),
+        "usage_queue_depth": _usage_queue.qsize(),
+    }
+
+    async def _ping() -> None:
+        async with _pool.connection(timeout=timeout) as conn:
+            await conn.execute("SELECT 1")
+
+    try:
+        # wait_for also bounds a stale pooled connection that hangs on
+        # execute — pool.connection()'s timeout only covers checkout.
+        await asyncio.wait_for(_ping(), timeout=timeout + 1.0)
+        info["status"] = "healthy"
+    except Exception as e:
+        info["status"] = "unavailable"
+        info["error"] = f"{type(e).__name__}: {e}"[:200]
+    return info
 
 
 def record_usage(token: Optional[str], route_name: str, is_error: bool) -> None:

@@ -847,20 +847,29 @@ async def _probe_backend(backend_url: str, probe_path: str, proxy: Optional[str]
 
 @app.get("/health")
 async def health_check():
-    """Report per-backend reachability.
+    """Report database and per-backend reachability.
 
-    Probes every unique upstream URL across all routes (load-balanced pools
-    are expanded). Uses the route's proxy client when set so VPN-only
-    backends are probed through the tunnel. Probe path is per-route via
-    ``health_path``: absent defaults to ``/health``; explicit ``null`` or
-    empty string skips probing (useful for backends like Kokoro TTS that
-    don't expose a health endpoint). Status values: ``healthy`` (200),
-    ``unhealthy`` (non-200), ``unavailable`` (connect/timeout), ``skipped``
-    (probing disabled). Router itself always reports healthy.
+    Backends: probes every unique upstream URL across all routes
+    (load-balanced pools are expanded). Uses the route's proxy client when
+    set so VPN-only backends are probed through the tunnel. Probe path is
+    per-route via ``health_path``: absent defaults to ``/health``; explicit
+    ``null`` or empty string skips probing (useful for backends like Kokoro
+    TTS that don't expose a health endpoint). Status values: ``healthy``
+    (200), ``unhealthy`` (non-200), ``unavailable`` (connect/timeout),
+    ``skipped`` (probing disabled).
 
-    Probes fan out in parallel via ``asyncio.gather`` so total latency is
-    bounded by the slowest single backend. Not suitable for kubelet
-    probes — use ``/livez`` for those.
+    Database: pings Postgres and reports the key-store state (cached key
+    count, seconds since the last successful key refresh, usage-queue
+    depth). The top-level ``status`` is ``healthy`` or — when the database
+    is unreachable — ``degraded``: auth keeps working from the cached key
+    set, but key changes are frozen and usage records are dropped.
+
+    Always returns HTTP 200. Container healthchecks must not restart the
+    router on a database blip (startup *requires* the DB, while a running
+    router survives an outage on its cache), so degradation is encoded in
+    the body, not the status code. All probes fan out in parallel via
+    ``asyncio.gather``, so total latency is bounded by the slowest single
+    probe. Not suitable for kubelet probes — use ``/livez`` for those.
     """
     plan: List[Tuple[str, str, Optional[str]]] = []
     seen: set = set()
@@ -877,14 +886,21 @@ async def health_check():
                 continue
             plan.append((backend_url, probe_path, proxy))
 
-    results = await asyncio.gather(
-        *(_probe_backend(url, path, proxy) for url, path, proxy in plan)
+    db_health, results = await asyncio.gather(
+        store.health(timeout=_HEALTH_PROBE_TIMEOUT),
+        asyncio.gather(*(_probe_backend(url, path, proxy) for url, path, proxy in plan)),
     )
     for (url, _, _), status in zip(plan, results):
         backend_status[url] = status
 
-    logger.debug(f"health check backends={backend_status}")
-    return {"status": "healthy", "router": "model-orchestrator", "backends": backend_status}
+    overall = "healthy" if db_health["status"] == "healthy" else "degraded"
+    logger.debug(f"health check status={overall} db={db_health['status']} backends={backend_status}")
+    return {
+        "status": overall,
+        "router": "model-orchestrator",
+        "database": db_health,
+        "backends": backend_status,
+    }
 
 # Metrics endpoint (now requires auth - Bug 7 fix)
 @app.get("/metrics")

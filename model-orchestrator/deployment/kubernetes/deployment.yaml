@@ -45,16 +45,19 @@ spec:
               mountPath: /app/config.yaml
               subPath: config.yaml
               readOnly: true
+          # /livez is the cheap process-up probe. /health walks every backend
+          # and pings Postgres — operator-facing, not for the kubelet (a
+          # slow backend would blow the probe budget and crashloop the pod).
           livenessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: http
             initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
           readinessProbe:
             httpGet:
-              path: /health
+              path: /livez
               port: http
             initialDelaySeconds: 5
             periodSeconds: 10
