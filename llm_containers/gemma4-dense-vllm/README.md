@@ -35,7 +35,7 @@ heads even though the model only uses 4 (vllm-metal #276).
 |---|---|---|---|
 | 32K  | ~10.5 GB | 4 concurrent | 4 concurrent + headroom |
 | 64K  | ~21.4 GB | 2 concurrent | 2 concurrent + headroom |
-| 128K | ~42.7 GB | **1 concurrent (default)** | 1 concurrent + headroom |
+| 128K | ~42.7 GB | **1 concurrent + headroom (default, 0.95 util)** | 1 concurrent + headroom |
 | 256K | ~85 GB   | Doesn't fit | Doesn't fit |
 
 To run **full BF16** (~61 GB weights), set `MODEL=google/gemma-4-31B-it`
@@ -88,12 +88,12 @@ min cold to ~2-3 min warm.
 |---|---|---|
 | `MODEL` | `RedHatAI/gemma-4-31B-it-FP8-Dynamic` | Swap for BF16, NVFP4, etc. (see below) |
 | `MAX_MODEL_LEN` | `131072` | 128K. Lower for higher concurrency; raise to 262144 on H200 |
-| `MAX_NUM_SEQS` | `16` | Capped by 128K KV pool footprint at 0.92 util |
+| `MAX_NUM_SEQS` | `16` | Capped by 128K KV pool footprint at 0.95 util |
 | `MAX_NUM_BATCHED_TOKENS` | `8192` | Chunked-prefill upper bound |
-| `GPU_MEMORY_UTILIZATION` | `0.92` | Hybrid KV manager needs headroom |
+| `GPU_MEMORY_UTILIZATION` | `0.95` | FP8 default; vLLM recipe sanctions 0.90–0.95 to maximize KV |
 | `KV_CACHE_DTYPE` | `auto` (BF16) | **Do not change** — Issue #40388 makes FP8 KV unsafe with FP8 weights |
 | `CUDAGRAPH_CAPTURE_SIZES` | `1,2,4,8,16` | Restricts graph capture to realistic agent batches |
-| `LIMIT_MM_PER_PROMPT` | `image=2,audio=0` | Multimodal on; audio not supported at 31B |
+| `LIMIT_MM_PER_PROMPT` | `image=2,audio=0` | Multimodal on. NOTE: official vLLM recipe shows `audio:1` for 31B — verify before relying on `audio=0` |
 | `TOOL_CALL_PARSER` | `gemma4` | Native Gemma 4 parser |
 | `REASONING_PARSER` | `gemma4` | Extracts thinking content into `reasoning_content` |
 | `ENABLE_THINKING` | `true` | Server-side `<\|think\|>` injection |

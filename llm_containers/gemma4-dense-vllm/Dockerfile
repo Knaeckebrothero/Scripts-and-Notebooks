@@ -26,7 +26,7 @@
 #     TRITON_ATTN there. FA3 on Hopper/Blackwell handles it natively.
 #
 # GPU compatibility (at default FP8 weights / 128K context / BF16 KV):
-#   - A100-80GB (sm_80):  exactly 1 concurrent 128K sequence (~42.7 GB / 42.6 GB pool).
+#   - A100-80GB (sm_80):  1 concurrent 128K sequence + ~5% headroom (~42.7 GB / ~45 GB pool, 0.95 util).
 #                         For >1 concurrent agent, queue externally or lower
 #                         MAX_MODEL_LEN (e.g. 65536 → 2 concurrent fit).
 #   - H100/H200 (sm_90):  full 128K with concurrency headroom; native FP8 TC,

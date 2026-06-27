@@ -6,14 +6,14 @@
 # Model memory (DEFAULT: FP8 weights ~31 GB, BF16 KV — see Issue #40388):
 #   - 32K ctx:  ~10.5 GB per sequence  (4 concurrent fit on A100-80GB)
 #   - 64K ctx:  ~21.4 GB per sequence  (2 concurrent fit on A100-80GB)
-#   - 128K ctx: ~42.7 GB per sequence  (exactly 1 concurrent at 0.92 util)
+#   - 128K ctx: ~42.7 GB per sequence  (1 concurrent + ~5% headroom at 0.95 util)
 #   - 256K ctx: ~85 GB per sequence    (will not fit any single GPU)
 #
 # Per-sequence KV is dominated by global layers (10 layers x 16 forced KV heads
 # x 512 head_dim x BF16 x ctx). vLLM PagedAttention forces uniform tensor shapes
 # across the 5:1 SWA/global layer mix, so global layers are allocated as if they
 # had 16 KV heads (not 4) and separate K/V (not shared) — see vllm-metal #276.
-# The "128K KV pool ~42.6 GB" headroom on A100 means: route long-context agents
+# The "128K KV pool ~45 GB" headroom on A100 (0.95 util) means: route long-context agents
 # through external queueing in the application router, not vLLM's scheduler.
 #
 # To run full-precision BF16 (~61 GB weights, A100-80GB+ only):
@@ -188,9 +188,14 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-131072}"
 
 TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 
-# GPU memory — 0.92 leaves bookkeeping headroom for the Hybrid KV Cache Manager.
-# Bump to 0.95 on H100/H200 or when using FP8 quants of the model.
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.92}"
+# GPU memory — 0.95 for the FP8 default model. The official vLLM Gemma 4 recipe
+# sanctions 0.90-0.95 ("use 0.90 to 0.95 to maximize KV cache capacity"), and FP8
+# weights (~31 GB) leave a large absolute pool, so 0.95 is safe and is what lets a
+# single 128K sequence fit (~45 GB pool vs ~42.7 GB/seq -> ~1.05x). Multimodal does
+# NOT need a lower util — vLLM reserves vision-encoder memory via LIMIT_MM_PER_PROMPT
+# during boot profiling. Drop to 0.92 only for a BF16 MODEL override (tighter
+# headroom), or if heavy multimodal bursts OOM past the profiled activation peak.
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 
 # KV cache dtype — MUST stay on `auto` (BF16) for Gemma 4 on every architecture.
 # vLLM Issue #40388: per-token FP8 KV quantization requires a 2:1 block-to-scale
@@ -204,7 +209,7 @@ if [ -z "${KV_CACHE_DTYPE}" ]; then
 fi
 
 # Batching — capped at 16 because at 128K context a single sequence consumes
-# ~42.7 GB of the ~42.6 GB KV pool on A100-80GB at 0.92 util. Admitting more
+# ~42.7 GB of the ~45 GB KV pool on A100-80GB at 0.95 util. Admitting more
 # concurrent sequences than the pool can sustain triggers cascading preemptions
 # (watch vllm:num_preemptions_total). Long-context concurrency is the router's
 # job, not vLLM's scheduler. Raise only if the typical session length is well
