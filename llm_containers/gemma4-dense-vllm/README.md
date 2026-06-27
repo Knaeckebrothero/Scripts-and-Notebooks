@@ -93,7 +93,7 @@ min cold to ~2-3 min warm.
 | `GPU_MEMORY_UTILIZATION` | `0.95` | FP8 default; vLLM recipe sanctions 0.90–0.95 to maximize KV |
 | `KV_CACHE_DTYPE` | `auto` (BF16) | **Do not change** — Issue #40388 makes FP8 KV unsafe with FP8 weights |
 | `CUDAGRAPH_CAPTURE_SIZES` | `1,2,4,8,16` | Restricts graph capture to realistic agent batches |
-| `LIMIT_MM_PER_PROMPT` | `image=2,audio=0` | Multimodal on. NOTE: official vLLM recipe shows `audio:1` for 31B — verify before relying on `audio=0` |
+| `LIMIT_MM_PER_PROMPT` | `image=5,audio=0` | Up to 5 images/request. `audio=0` is mandatory — model `config.json` has `audio_config: null` (no audio tower); a non-zero audio limit errors at startup. Higher image caps shrink the 128K KV pool |
 | `TOOL_CALL_PARSER` | `gemma4` | Native Gemma 4 parser |
 | `REASONING_PARSER` | `gemma4` | Extracts thinking content into `reasoning_content` |
 | `ENABLE_THINKING` | `true` | Server-side `<\|think\|>` injection |

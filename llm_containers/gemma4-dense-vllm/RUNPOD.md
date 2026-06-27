@@ -43,7 +43,7 @@ HUGGING_FACE_HUB_TOKEN=hf_xxx
 | `MAX_NUM_BATCHED_TOKENS` | `8192` | Chunked-prefill upper bound |
 | `KV_CACHE_DTYPE` | `auto` (BF16) | **Do not change** — Issue #40388 |
 | `GPU_MEMORY_UTILIZATION` | `0.95` | Default; maximizes KV so one 128K seq fits. vLLM recipe sanctions 0.90–0.95 for FP8 |
-| `LIMIT_MM_PER_PROMPT` | `image=2,audio=0` | Vision on by default |
+| `LIMIT_MM_PER_PROMPT` | `image=5,audio=0` | Up to 5 images/request; audio unsupported on 31B (`audio_config: null`) |
 | `ENABLE_THINKING` | `true` | Server-side `<\|think\|>` injection |
 | `TOOL_CALL_PARSER` | `gemma4` | |
 | `REASONING_PARSER` | `gemma4` | |

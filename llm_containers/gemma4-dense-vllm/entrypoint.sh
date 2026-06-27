@@ -222,11 +222,21 @@ MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 # eating GBs of VRAM that the agent loop will never use. Saved memory goes to
 # the KV pool. Trade-off: a burst exceeding 16 concurrent decodes drops to
 # eager execution for that step (slower but correct).
+#
+# Comma-separated list. Emitted below as vLLM's documented
+# --compilation-config '{"cudagraph_capture_sizes":[...]}' form. The bare
+# --cudagraph-capture-sizes flag rejects a comma-joined value ("invalid int
+# value" -> argparse crash loop), so do NOT switch back to it. Set empty to
+# fall back to vLLM's auto-derived sizes.
 CUDAGRAPH_CAPTURE_SIZES="${CUDAGRAPH_CAPTURE_SIZES:-1,2,4,8,16}"
 
-# Multimodal — Gemma 4 31B-it supports text + image + video, NO audio (audio is
-# E2B/E4B only). Setting audio=0 frees the audio encoder buffer for the KV pool.
-LIMIT_MM_PER_PROMPT="${LIMIT_MM_PER_PROMPT:-image=2,audio=0}"
+# Multimodal — Gemma 4 31B-it is text + image + video only. Audio is E2B/E4B
+# only: this model's config.json has audio_config=null (no audio tower), so
+# audio=0 is mandatory — a non-zero audio limit errors at startup. image=5 caps
+# images per request; raising it grows the boot-time vision-encoder reservation,
+# which shrinks the 128K KV pool — re-check the startup "Maximum concurrency"
+# line if you change it.
+LIMIT_MM_PER_PROMPT="${LIMIT_MM_PER_PROMPT:-image=5,audio=0}"
 
 # Performance flags — V1 engine default is chunked prefill + prefix caching on.
 # NOTE: Gemma 4 sliding-window attention reduces prefix-cache hit efficiency vs
@@ -298,7 +308,7 @@ fi
 [ -n "${REASONING_PARSER}" ] && CMD="${CMD} --reasoning-parser ${REASONING_PARSER}"
 [ -n "${API_KEY}" ]          && CMD="${CMD} --api-key ${API_KEY}"
 
-[ -n "${CUDAGRAPH_CAPTURE_SIZES}" ] && CMD="${CMD} --cudagraph-capture-sizes ${CUDAGRAPH_CAPTURE_SIZES}"
+[ -n "${CUDAGRAPH_CAPTURE_SIZES}" ] && CMD="${CMD} --compilation-config {\"cudagraph_capture_sizes\":[${CUDAGRAPH_CAPTURE_SIZES}]}"
 [ -n "${LIMIT_MM_PER_PROMPT}" ]     && CMD="${CMD} --limit-mm-per-prompt ${LIMIT_MM_PER_PROMPT}"
 
 if [ "${ENABLE_THINKING}" = "true" ]; then
@@ -337,4 +347,7 @@ echo "VLLM_CONFIG_ROOT:  ${VLLM_CONFIG_ROOT}"
 echo "Endpoint:          http://${HOST}:${PORT}/v1"
 echo "=============================================="
 
+# Disable globbing so JSON args (compilation-config's [...], chat-template {...})
+# survive the unquoted word-split below intact; space word-splitting still applies.
+set -f
 exec ${CMD}

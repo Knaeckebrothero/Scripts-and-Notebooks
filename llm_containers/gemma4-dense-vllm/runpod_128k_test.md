@@ -45,9 +45,15 @@ which are test-only choices — so a stock launch already does the right thing:
 | `MAX_MODEL_LEN` | `131072` | the 128K requirement |
 | `KV_CACHE_DTYPE` | `auto` | forced BF16 — fp8 KV blocked on FP8 weights (#40388) |
 | `GPU_MEMORY_UTILIZATION` | `0.95` | default; makes one 128K seq fit (~1.05x), recipe-sanctioned for FP8. Do **not** exceed 0.95 with live multimodal traffic — vision/video activations can spike past the profiled peak and OOM |
-| `LIMIT_MM_PER_PROMPT` | `image=2,audio=0` | agents **are** multimodal — keep vision. Set `image=N` to your real per-request max (it sizes the encoder reservation, which shrinks the KV pool — so confirm Step 0 is still ≥ 1.0x). ⚠️ `audio=0`: the official recipe shows `audio:1` for the 31B — verify the 31B accepts audio before relying on this |
+| `LIMIT_MM_PER_PROMPT` | `image=5,audio=0` | default; up to 5 images/request — this sizes the vision-encoder reservation, which shrinks the KV pool, so **Step 0's metric must still read ≥ 1.0x** (if not, lower the image cap or trim context). `audio=0` is mandatory: the 31B has no audio tower (`config.json` `audio_config: null`) |
 | `MAX_NUM_SEQS` | `4` `(override; default 16)` | admission cap for the test; keeps preemption tame if short requests pile up |
 | `ENABLE_THINKING` | `false` `(override; default true)` | clean content for the baseline; flip to `true` for the Step 3 reasoning probe |
+
+> **Fixed in this build:** the entrypoint previously crash-looped at startup on
+> `--cudagraph-capture-sizes` (a comma-joined value vLLM's argparse rejected). It
+> now emits the documented `--compilation-config '{"cudagraph_capture_sizes":[…]}'`
+> form. If you ever see an older image loop on that argument, that's the cause —
+> re-pull `:latest` (or pin the new `sha-`).
 
 First cold boot is ~12–15 min (~31 GB download + compile). The 1200s
 HEALTHCHECK start-period covers it — don't kill it early.
