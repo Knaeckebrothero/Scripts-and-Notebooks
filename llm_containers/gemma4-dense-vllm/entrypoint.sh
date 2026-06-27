@@ -309,7 +309,21 @@ fi
 [ -n "${API_KEY}" ]          && CMD="${CMD} --api-key ${API_KEY}"
 
 [ -n "${CUDAGRAPH_CAPTURE_SIZES}" ] && CMD="${CMD} --compilation-config {\"cudagraph_capture_sizes\":[${CUDAGRAPH_CAPTURE_SIZES}]}"
-[ -n "${LIMIT_MM_PER_PROMPT}" ]     && CMD="${CMD} --limit-mm-per-prompt ${LIMIT_MM_PER_PROMPT}"
+# vLLM wants --limit-mm-per-prompt as a JSON object, not key=value. Accept the
+# friendly form (image=5,audio=0), tolerate stray spaces, and convert it to
+# {"image":5,"audio":0}. A value already starting with '{' is passed through.
+if [ -n "${LIMIT_MM_PER_PROMPT}" ]; then
+    _mm="${LIMIT_MM_PER_PROMPT// /}"
+    if [ "${_mm:0:1}" != "{" ]; then
+        _mm_json=""
+        IFS=',' read -ra _mm_pairs <<< "${_mm}"
+        for _mm_p in "${_mm_pairs[@]}"; do
+            _mm_json="${_mm_json:+${_mm_json},}\"${_mm_p%%=*}\":${_mm_p##*=}"
+        done
+        _mm="{${_mm_json}}"
+    fi
+    CMD="${CMD} --limit-mm-per-prompt ${_mm}"
+fi
 
 if [ "${ENABLE_THINKING}" = "true" ]; then
     CMD="${CMD} --default-chat-template-kwargs {\"enable_thinking\":true}"

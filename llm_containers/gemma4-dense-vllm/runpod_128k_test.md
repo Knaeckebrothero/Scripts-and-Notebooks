@@ -49,11 +49,12 @@ which are test-only choices — so a stock launch already does the right thing:
 | `MAX_NUM_SEQS` | `4` `(override; default 16)` | admission cap for the test; keeps preemption tame if short requests pile up |
 | `ENABLE_THINKING` | `false` `(override; default true)` | clean content for the baseline; flip to `true` for the Step 3 reasoning probe |
 
-> **Fixed in this build:** the entrypoint previously crash-looped at startup on
-> `--cudagraph-capture-sizes` (a comma-joined value vLLM's argparse rejected). It
-> now emits the documented `--compilation-config '{"cudagraph_capture_sizes":[…]}'`
-> form. If you ever see an older image loop on that argument, that's the cause —
-> re-pull `:latest` (or pin the new `sha-`).
+> **Fixed in this build:** the entrypoint previously crash-looped on two args
+> that vLLM parses as JSON — `--cudagraph-capture-sizes` (now emitted as
+> `--compilation-config '{"cudagraph_capture_sizes":[…]}'`) and
+> `--limit-mm-per-prompt` (the friendly `image=5,audio=0` form is now converted
+> to `{"image":5,"audio":0}`, space-tolerant). If an older image loops on either,
+> re-pull `:latest` (or pin the latest `sha-`).
 
 First cold boot is ~12–15 min (~31 GB download + compile). The 1200s
 HEALTHCHECK start-period covers it — don't kill it early.
