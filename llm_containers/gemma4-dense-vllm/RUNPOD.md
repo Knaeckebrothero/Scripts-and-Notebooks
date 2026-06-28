@@ -98,6 +98,18 @@ r = client.chat.completions.create(
 
 ## Gotchas
 
+- **`Background writer channel closed` = DISK FULL, not a bug.** If the boot
+  crash-loops during weight download with `RuntimeError: Internal Writer Error:
+  Background writer channel closed` (from `hf_xet`), the `/mnt/cache` volume is
+  too small — the default model is ~31 GB (one shard ~27 GB) and the Xet
+  downloader needs staging headroom. Look just above the traceback for
+  `Not enough free disk space`. **Fix:** attach a **fresh** 80 GB volume at
+  `/mnt/cache` (a too-small or already-mounted volume that received a prior
+  failed download leaves orphaned partial blobs — free space collapses across
+  restarts, so don't reuse it; use a clean volume or clear
+  `/mnt/cache/huggingface`). The entrypoint now prints an explicit warning when
+  free space at `HF_HOME` is below `MIN_DISK_GB` (default 40); set
+  `SKIP_DISK_CHECK=true` to silence on a known-warm volume.
 - **HF gating:** RedHatAI re-pack is usually ungated. If the pod fails
   with 401, set `HUGGING_FACE_HUB_TOKEN` and accept the Gemma license at
   huggingface.co/google/gemma-4-31B-it under the same account.

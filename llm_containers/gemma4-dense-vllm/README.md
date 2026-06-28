@@ -98,6 +98,7 @@ min cold to ~2-3 min warm.
 | `REASONING_PARSER` | `gemma4` | Extracts thinking content into `reasoning_content` |
 | `ENABLE_THINKING` | `true` | Server-side `<\|think\|>` injection |
 | `MIN_VRAM_GB` | `44` | Warns below; bump to 110 for BF16 override |
+| `MIN_DISK_GB` | `40` | Warns if free space at `HF_HOME` is below this — a cold download needs ~31 GB + Xet staging. `SKIP_DISK_CHECK=true` silences on a warm volume |
 | `ALLOW_ADA` | `false` | Set `true` to bypass Ada refusal (use the L40S image instead) |
 
 ## Alternative model IDs (verified on HuggingFace)

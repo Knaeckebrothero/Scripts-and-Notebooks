@@ -42,6 +42,41 @@ export HF_HOME="${HF_HOME:-/mnt/cache/huggingface}"
 export VLLM_CONFIG_ROOT="${VLLM_CONFIG_ROOT:-/mnt/cache/vllm}"
 mkdir -p "${HF_HOME}" "${VLLM_CONFIG_ROOT}"
 
+# Disk pre-flight: the default FP8 weights are ~31 GB (one shard alone ~27 GB),
+# and Hugging Face's Xet downloader needs transient staging room on top. A
+# too-small volume at /mnt/cache does NOT fail cleanly — hf_xet crash-loops with
+# an opaque "RuntimeError: Internal Writer Error: Background writer channel
+# closed" (ENOSPC in disguise), and each failed retry orphans partial blobs that
+# eat the rest of the disk (free space collapses across restarts). Surface the
+# real cause up front. Non-fatal (mirrors the VRAM check): a warm volume that
+# already has the weights cached can legitimately sit below this floor and boot.
+MIN_DISK_GB="${MIN_DISK_GB:-40}"
+DISK_FREE_GB="$(df -PBG "${HF_HOME}" 2>/dev/null | awk 'NR==2 {gsub(/[^0-9]/,"",$4); print $4}')"
+case "${DISK_FREE_GB}" in ''|*[!0-9]*) DISK_FREE_GB="" ;; esac  # numeric-guard
+if [ -n "${DISK_FREE_GB}" ] && [ "${DISK_FREE_GB}" -lt "${MIN_DISK_GB}" ] \
+   && [ "${SKIP_DISK_CHECK}" != "true" ]; then
+    echo ""
+    echo "================================================================"
+    echo "  WARNING: only ${DISK_FREE_GB} GB free at ${HF_HOME}"
+    echo "           — need ~${MIN_DISK_GB}+ GB for a cold weight download"
+    echo "================================================================"
+    echo "  Default MODEL is ~31 GB (one shard ~27 GB); the Xet downloader"
+    echo "  needs staging headroom on top. On a fresh pod this WILL crash-loop"
+    echo "  with an opaque 'Background writer channel closed' error from hf_xet"
+    echo "  — that message means DISK FULL, not a network or model fault."
+    echo ""
+    echo "  Fix (RunPod): attach a FRESH ${MIN_DISK_GB}+ GB volume at /mnt/cache"
+    echo "  (80 GB recommended — see RUNPOD.md). A prior failed boot leaves"
+    echo "  orphaned partial blobs, so reuse a clean volume or clear ${HF_HOME}."
+    echo ""
+    echo "  If the weights are ALREADY cached on this volume, ignore this."
+    echo "  Set SKIP_DISK_CHECK=true to silence."
+    echo "  Continuing in 5s — Ctrl+C to abort..."
+    echo "================================================================"
+    echo ""
+    sleep 5
+fi
+
 # Skip the 60s peer-to-peer GPU connectivity probe — irrelevant on single-GPU
 # nodes (which is the only configuration this image is sized for at TP=1).
 export VLLM_SKIP_P2P_CHECK="${VLLM_SKIP_P2P_CHECK:-1}"
