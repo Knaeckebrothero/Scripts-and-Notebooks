@@ -15,7 +15,7 @@ instead.
 
 | GPU | Max context (FP8 default) | Notes |
 |---|---|---|
-| A100-80GB | 128K (1 concurrent) or 32K (4 concurrent) | Recommended starter |
+| A100-80GB | 128K (2 concurrent, measured) or 32K (more) | Recommended starter |
 | H100-80GB | 128K + headroom | Native FP8 TC speed |
 | H200-141GB | 256K | Set `MAX_MODEL_LEN=262144` |
 | B200 | 128K + | Native FP8 TC; FP4 weights also possible |
@@ -39,7 +39,7 @@ HUGGING_FACE_HUB_TOKEN=hf_xxx
 |---|---|---|
 | `MODEL` | `RedHatAI/gemma-4-31B-it-FP8-Dynamic` | See alternatives in README |
 | `MAX_MODEL_LEN` | `131072` | Raise to `262144` on H200 |
-| `MAX_NUM_SEQS` | `16` | KV-pool bound at 128K |
+| `MAX_NUM_SEQS` | `2` | Measured 128K KV ceiling (2× ~124K ≈ 70% pool, 0 preemption); admits 2, queues the rest. Raise for shorter contexts |
 | `MAX_NUM_BATCHED_TOKENS` | `8192` | Chunked-prefill upper bound |
 | `KV_CACHE_DTYPE` | `auto` (BF16) | **Do not change** — Issue #40388 |
 | `GPU_MEMORY_UTILIZATION` | `0.95` | Default; maximizes KV so one 128K seq fits. vLLM recipe sanctions 0.90–0.95 for FP8 |

@@ -243,13 +243,20 @@ if [ -z "${KV_CACHE_DTYPE}" ]; then
     KV_CACHE_DTYPE="auto"
 fi
 
-# Batching — capped at 16 because at 128K context a single sequence consumes
-# ~42.7 GB of the ~45 GB KV pool on A100-80GB at 0.95 util. Admitting more
-# concurrent sequences than the pool can sustain triggers cascading preemptions
-# (watch vllm:num_preemptions_total). Long-context concurrency is the router's
-# job, not vLLM's scheduler. Raise only if the typical session length is well
-# below the max — e.g. with 32K average context, 4 concurrent fit comfortably.
-MAX_NUM_SEQS="${MAX_NUM_SEQS:-16}"
+# Batching — capped at 2 to match the MEASURED 128K KV ceiling (A100-80GB, 0.95
+# util, vLLM v0.22): the KV pool holds ~355K tokens, so two full ~124K sequences
+# occupy ~70% (verified 2026-06-28: both recalled correctly, 0 preemptions); a
+# 3rd would exceed the pool and trigger cascading preemption-recompute (watch
+# vllm:num_preemptions_total). The earlier ~42.7 GB/seq estimate assumed vLLM's
+# legacy 16-KV-head global-layer over-allocation, which v0.22's hybrid manager
+# no longer does — real per-seq KV is ~2.7x smaller, hence 2 fit, not 1.
+# Capping at 2 makes vLLM admit 2 and QUEUE the rest cleanly instead of
+# over-admitting and thrashing. NOTE this bounds *fit*, not throughput: one 124K
+# prefill already saturates compute (~628 tok/s on the Ampere FP8-emulated
+# path), so a 2nd concurrent stream halves each request's speed — it is burst
+# headroom, not parallelism. Raise for shorter sessions (32K average fits many
+# more) or lower MAX_MODEL_LEN; long-context fan-out past 2 is the router's job.
+MAX_NUM_SEQS="${MAX_NUM_SEQS:-2}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-8192}"
 
 # Restrict CUDA graph capture to the realistic batch sizes for an agentic

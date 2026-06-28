@@ -35,8 +35,23 @@ heads even though the model only uses 4 (vllm-metal #276).
 |---|---|---|---|
 | 32K  | ~10.5 GB | 4 concurrent | 4 concurrent + headroom |
 | 64K  | ~21.4 GB | 2 concurrent | 2 concurrent + headroom |
-| 128K | ~42.7 GB | **1 concurrent + headroom (default, 0.95 util)** | 1 concurrent + headroom |
-| 256K | ~85 GB   | Doesn't fit | Doesn't fit |
+| 128K | ~42.7 GB | **2 concurrent (measured; default, 0.95 util)** | 2 concurrent + headroom |
+| 256K | ~85 GB   | 1 concurrent likely (untested) | 1 concurrent likely |
+
+> **Measured update (2026-06-28, A100-80GB, 0.95 util, vLLM v0.22).** The
+> `Per-session KV` column above is the original *worst-case* estimate, which
+> assumed vLLM over-allocates the global layers to 16 KV heads (the legacy
+> vllm-metal #276 behavior). v0.22's hybrid KV manager no longer does this, so
+> real per-session KV is ~2–2.7× smaller. Empirically the **KV pool holds
+> ~355K tokens**: two full ~124K streams ran concurrently at **~70% KV usage
+> with 0 preemptions** and correct needle recall. So **128K fits 2 concurrent,
+> not 1**, and a single **256K** stream (~72% of the pool) very likely fits if
+> you set `MAX_MODEL_LEN=262144` (not yet tested; prefill ~7 min on the Ampere
+> FP8-emulated path). The 32K/64K rows are the old conservative estimate and
+> have not been re-measured — trust the boot-log `Maximum concurrency for N
+> tokens per request: <x>` line for your exact config. Note that *fitting* 2 is
+> not *2× throughput*: one 124K prefill already saturates compute (~628 tok/s),
+> so a 2nd concurrent stream is burst headroom, not parallelism.
 
 To run **full BF16** (~61 GB weights), set `MODEL=google/gemma-4-31B-it`
 and cap `MAX_MODEL_LEN=65536` — requires A100-80GB or better, and bump
@@ -88,7 +103,7 @@ min cold to ~2-3 min warm.
 |---|---|---|
 | `MODEL` | `RedHatAI/gemma-4-31B-it-FP8-Dynamic` | Swap for BF16, NVFP4, etc. (see below) |
 | `MAX_MODEL_LEN` | `131072` | 128K. Lower for higher concurrency; raise to 262144 on H200 |
-| `MAX_NUM_SEQS` | `16` | Capped by 128K KV pool footprint at 0.95 util |
+| `MAX_NUM_SEQS` | `2` | Matches the measured 128K KV ceiling (2× ~124K ≈ 70% pool, 0 preemption). Server admits 2 and queues the rest. Raise for shorter contexts, or to allow short requests into spare KV |
 | `MAX_NUM_BATCHED_TOKENS` | `8192` | Chunked-prefill upper bound |
 | `GPU_MEMORY_UTILIZATION` | `0.95` | FP8 default; vLLM recipe sanctions 0.90–0.95 to maximize KV |
 | `KV_CACHE_DTYPE` | `auto` (BF16) | **Do not change** — Issue #40388 makes FP8 KV unsafe with FP8 weights |

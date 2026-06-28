@@ -1,13 +1,20 @@
-# RunPod A100-80GB test — FP8 @ 128K, single stream
+# RunPod A100-80GB test — FP8 @ 128K, up to 2 streams
 
 Goal: validate `gemma4-dense-vllm` on a rented **A100-80GB** at the production
-target for autonomous agents — **FP8-Dynamic weights, 128K context, 1
-concurrent stream, full quality** (no INT4, no fp8 KV).
+target for autonomous agents — **FP8-Dynamic weights, 128K context, 1–2
+concurrent streams, full quality** (no INT4, no fp8 KV).
 
-This is the deliberate tradeoff: 1 guaranteed 128K stream at FP8 quality. More
-than one concurrent 128K stream does **not** fit a single A100-80GB at BF16 KV
-(2× 128K ≈ 85 GB KV vs ~45 GB pool) — scale that horizontally (more pods) or on
-bigger hardware (H200-141GB), not on this GPU.
+> **Results (2026-06-28) — passed, and capacity beat the estimate.** The KV
+> pool actually holds **~355K tokens**, so **two** full ~124K streams run
+> concurrently at **~70% KV usage, 0 preemptions**, with correct needle recall.
+> `MAX_NUM_SEQS` now defaults to **2**. The old "2× 128K ≈ 85 GB > ~45 GB pool"
+> reasoning assumed vLLM's legacy 16-KV-head global-layer over-allocation, which
+> v0.22's hybrid manager dropped (~2.7× less per-seq KV). **Caveat:** fitting 2
+> is not 2× throughput — a single 124K prefill already saturates compute
+> (~628 tok/s ⇒ ~3.3 min/prefill on the Ampere FP8-emulated path), so a 2nd
+> concurrent stream halves each request's speed. It is burst headroom, not
+> parallelism. For >2 concurrent 128K streams, scale horizontally (more pods) or
+> onto bigger hardware (2× A100 TP=2, H200-141GB).
 
 ## Why this differs from the 2026-04 smoke test
 
@@ -46,7 +53,7 @@ which are test-only choices — so a stock launch already does the right thing:
 | `KV_CACHE_DTYPE` | `auto` | forced BF16 — fp8 KV blocked on FP8 weights (#40388) |
 | `GPU_MEMORY_UTILIZATION` | `0.95` | default; makes one 128K seq fit (~1.05x), recipe-sanctioned for FP8. Do **not** exceed 0.95 with live multimodal traffic — vision/video activations can spike past the profiled peak and OOM |
 | `LIMIT_MM_PER_PROMPT` | `image=5,audio=0` | default; up to 5 images/request — this sizes the vision-encoder reservation, which shrinks the KV pool, so **Step 0's metric must still read ≥ 1.0x** (if not, lower the image cap or trim context). `audio=0` is mandatory: the 31B has no audio tower (`config.json` `audio_config: null`) |
-| `MAX_NUM_SEQS` | `4` `(override; default 16)` | admission cap for the test; keeps preemption tame if short requests pile up |
+| `MAX_NUM_SEQS` | `2` | default; the measured 128K KV ceiling — admits 2, queues the rest (no preemption thrash) |
 | `ENABLE_THINKING` | `false` `(override; default true)` | clean content for the baseline; flip to `true` for the Step 3 reasoning probe |
 
 > **Fixed in this build:** the entrypoint previously crash-looped on two args
