@@ -295,14 +295,13 @@ REASONING_PARSER="${REASONING_PARSER:-gemma4}"
 
 # Thinking mode — server-side injection of the <|think|> activation token.
 # Without this, --reasoning-parser gemma4 has nothing to extract because the
-# model emits Chain-of-Thought inline in `content`. Pair this with client-side
-# `"skip_special_tokens": false` in the request payload so the <|channel|>
-# delimiters survive vLLM's text decoder and reach the reasoning parser
-# (vLLM Issue #38855). The model-orchestrator injects that flag for the Gemma 4
-# routes; direct callers must send it. STREAMING CAVEAT: the gemma4 parser's
-# streaming path matches on decoded text, not token ids, so
-# skip_special_tokens=false is unreliable with stream=true (reasoning may still
-# surface inline in `content`). Set ENABLE_THINKING=false to disable globally.
+# model emits Chain-of-Thought inline in `content`. With it, the parser returns
+# the thinking in the response `reasoning` field (NOT the deprecated
+# `reasoning_content`). The parser's adjust_request auto-sets
+# skip_special_tokens=false so the <|channel> markers survive — clients need not
+# send it. Streaming works too (token-id based path); read delta.reasoning.
+# (#38855 was a field-name false alarm — see
+# ../gemma4-moe-vllm/REASONING_CONTENT_38855.md.) Set ENABLE_THINKING=false to disable.
 ENABLE_THINKING="${ENABLE_THINKING:-true}"
 
 # API

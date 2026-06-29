@@ -83,7 +83,7 @@ docker run --gpus all -p 8000:8000 --ipc=host \
 | `MAX_NUM_BATCHED_TOKENS` | `16384` | Higher throughput than dense |
 | `TOOL_CALL_PARSER` | `gemma4` | Same parser as dense variant |
 | `REASONING_PARSER` | `gemma4` | Extracts thinking into the `reasoning` field |
-| `ENABLE_THINKING` | `true` | Default thinking on for all requests via `--default-chat-template-kwargs`. Necessary but not sufficient — see **Gotchas** for the client-side `skip_special_tokens:false` requirement |
+| `ENABLE_THINKING` | `true` | Default thinking on for all requests via `--default-chat-template-kwargs`. The parser auto-handles `skip_special_tokens:false` (see **Gotchas**) |
 | `MIN_VRAM_GB` | `56` | Warn at startup if GPU has less; override if loading a quant variant |
 | `SKIP_VRAM_CHECK` | `false` | Set `true` to silence the L40S/<60 GB VRAM warning |
 
@@ -92,16 +92,17 @@ docker run --gpus all -p 8000:8000 --ipc=host \
 - **Same SWA + prefix cache caveats** as the dense variant — hybrid KV manager
   handles it, but prefix-cache hit rate is reduced vs pure global attention.
 - **FLASHINFER is unsupported** (vLLM #20865). Don't override.
-- **Reasoning (`reasoning`) needs a client-side flag.** Enabling thinking
-  server-side (`ENABLE_THINKING=true`, default) is not enough: vLLM strips the
-  `<|channel>` delimiters before the `gemma4` reasoning parser runs unless the
-  **client** also sends `"skip_special_tokens": false` (vLLM
-  [#38855](https://github.com/vllm-project/vllm/issues/38855), open on v0.22.0).
-  The `model-orchestrator` injects this for the Gemma 4 routes via
-  `request_defaults`; direct callers must add it themselves. **Streaming
-  caveat:** the parser's streaming path is still affected by #38855, so with
-  `stream=true` the `<|channel>` markers may surface inline in `content` even
-  with the flag set — reliable separation is non-streaming only for now.
+- **Reasoning (`reasoning`) and `skip_special_tokens`.** Enabling thinking
+  server-side (`ENABLE_THINKING=true`, default) is enough: the `gemma4`
+  reasoning parser's `adjust_request` sets `"skip_special_tokens": false`
+  itself, so the **client** doesn't need to send it (passing it anyway is
+  harmless). Thought content comes back in the response's `reasoning` field.
+  The `model-orchestrator` also injects the flag for the Gemma 4 routes via
+  `request_defaults`. **Streaming works:** the parser's streaming path is
+  token-based — read `delta.reasoning` in the streamed chunks. (vLLM
+  [#38855](https://github.com/vllm-project/vllm/issues/38855) was a false
+  alarm — a `reasoning_content` vs `reasoning` field-name confusion, now
+  resolved; see [`REASONING_CONTENT_38855.md`](./REASONING_CONTENT_38855.md).)
 - **MoE + prefix caching**: some A3B-class MoEs have shown cache-hit
   degradation on vLLM (issue #36493 for Qwen3.5-35B-A3B). Benchmark against
   your traffic pattern; disable with `ENABLE_PREFIX_CACHING=false` if you see

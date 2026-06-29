@@ -76,9 +76,12 @@ curl http://<pod-id>.runpod.net:<tcp-port>/v1/chat/completions \
   }'
 ```
 
-**Required**: send `"skip_special_tokens": false` in any reasoning-mode
-probe so the `<|channel|>` thought delimiters reach the gemma4 parser
-(Issue #38855).
+**Optional**: `"skip_special_tokens": false` is auto-handled by the gemma4
+parser's `adjust_request`, so callers don't need to send it (the examples
+include it, which is harmless). Thought content comes back in the response's
+`reasoning` field. (#38855 was a false alarm — a `reasoning_content` vs
+`reasoning` field-name mix-up; see
+[`../gemma4-moe-vllm/REASONING_CONTENT_38855.md`](../gemma4-moe-vllm/REASONING_CONTENT_38855.md).)
 
 **SSH tunnel:**
 ```bash

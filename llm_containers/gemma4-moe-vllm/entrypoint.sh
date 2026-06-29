@@ -165,15 +165,12 @@ REASONING_PARSER="${REASONING_PARSER:-gemma4}"
 # no <|channel> reasoning for --reasoning-parser gemma4 to extract. This sets
 # the default for every request via --default-chat-template-kwargs.
 #
-# IMPORTANT: enabling thinking server-side is necessary but NOT sufficient for a
-# clean `reasoning` field — vLLM strips the <|channel> delimiters before the
-# parser runs unless the *client* also sends `"skip_special_tokens": false`
-# (vLLM Issue #38855, still open on v0.22.0). The model-orchestrator injects
-# that for the Gemma 4 routes; direct callers must send it themselves.
-# STREAMING CAVEAT: the gemma4 parser's streaming path matches on decoded text,
-# not token ids, so skip_special_tokens=false is unreliable with stream=true —
-# reasoning may still surface inline in `content`. Set ENABLE_THINKING=false to
-# disable thinking globally.
+# The thinking is returned in the response `reasoning` field (NOT the deprecated
+# `reasoning_content`). The gemma4 parser's adjust_request auto-sets
+# skip_special_tokens=false so the <|channel> markers survive into the parser —
+# clients do not need to send it. Streaming works (token-id based path); read
+# delta.reasoning. (#38855 was a field-name false alarm, not a real bug — see
+# REASONING_CONTENT_38855.md.) Set ENABLE_THINKING=false to disable thinking globally.
 ENABLE_THINKING="${ENABLE_THINKING:-true}"
 
 HOST="${HOST:-0.0.0.0}"

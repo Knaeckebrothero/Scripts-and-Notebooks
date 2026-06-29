@@ -36,7 +36,7 @@ HUGGING_FACE_HUB_TOKEN=hf_xxx
 | `MAX_NUM_SEQS` | `64` | Batch more — only 4B active per token |
 | `TOOL_CALL_PARSER` | `gemma4` | Same parser as dense |
 | `REASONING_PARSER` | `gemma4` | Extracts thinking into `reasoning` |
-| `ENABLE_THINKING` | `true` | Default thinking on; needs client `skip_special_tokens:false` (see Gotchas) |
+| `ENABLE_THINKING` | `true` | Default thinking on; parser auto-handles `skip_special_tokens:false` (see Gotchas) |
 | `API_KEY` | (none) | Set to require bearer auth |
 
 ## Pod configuration
@@ -85,11 +85,15 @@ curl http://localhost:8000/v1/models
   prefix-cache hit rate (vLLM #3355, #14881). Net win; leave on.
 - **FLASHINFER not supported** (vLLM #20865). Entrypoint uses `FLASH_ATTN`;
   don't override.
-- **Clean `reasoning` needs a client flag.** `ENABLE_THINKING=true` (default)
-  turns thinking on, but vLLM only splits `reasoning` from `content` when the
-  request also carries `"skip_special_tokens": false` (vLLM #38855). The
-  `model-orchestrator` injects this for the Gemma 4 routes; direct callers must
-  send it. Streaming is still affected by #38855 — reliable for non-streaming.
+- **Clean `reasoning` and `skip_special_tokens`.** `ENABLE_THINKING=true`
+  (default) turns thinking on; the `gemma4` parser's `adjust_request` sets
+  `"skip_special_tokens": false` itself, so the client doesn't need to send it
+  (passing it anyway is harmless). vLLM splits the thought into the response's
+  `reasoning` field. The `model-orchestrator` also injects the flag for the
+  Gemma 4 routes. Streaming works too — read `delta.reasoning` in the streamed
+  chunks. (#38855 was a false alarm — a `reasoning_content` vs `reasoning`
+  field-name mix-up, now resolved; see
+  [`REASONING_CONTENT_38855.md`](./REASONING_CONTENT_38855.md).)
 - **Lower reasoning depth** than the 31B dense. Pick dense for deep chains
   and hard math; pick MoE for throughput + long context + concurrent sessions.
 - **First boot downloads ~27-50 GB** depending on MODEL — use a persistent

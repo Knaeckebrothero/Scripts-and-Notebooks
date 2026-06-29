@@ -5,8 +5,8 @@ llama.cpp Vulkan (RADV) container for **`unsloth/gemma-4-26B-A4B-it-GGUF`** on
 
 Built around the verdict in `../Hosting Gemma 4 on Strix Halo_ llama.cpp Vulkan
 over vLLM-ROCm.pdf`. vLLM-ROCm is rejected on this hardware: SWA disabled in V1
-on RDNA (#19367), HIP graph capture forces `--enforce-eager` (#32180), four
-open Gemma 4 parser bugs (#38847 / #38855 / #38910 / #39392).
+on RDNA (#19367), HIP graph capture forces `--enforce-eager` (#32180), three
+open Gemma 4 parser bugs (#38847 / #38910 / #39392).
 
 ## Model specs (26B-A4B MoE)
 

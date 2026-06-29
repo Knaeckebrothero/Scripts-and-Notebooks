@@ -117,11 +117,12 @@ PASS = prompt_tokens near 100K, correct needle recall, `finish_reason: stop`,
 no OOM in logs. Then push the filler toward ~125K tokens to exercise the top of
 the window.
 
-## Step 3 — reasoning (thinking on, NON-streaming)
+## Step 3 — reasoning (thinking on)
 
-Set `ENABLE_THINKING=true` (or pass per-request) and **send
-`skip_special_tokens: false`** so the `<|channel|>` delimiters reach the gemma4
-parser (#38855). Expect a populated `reasoning` field.
+Set `ENABLE_THINKING=true` (or pass per-request). `skip_special_tokens: false`
+is auto-handled by the gemma4 parser's `adjust_request`, so you don't need to
+send it (the example below includes it, which is harmless). Expect a populated
+`reasoning` field.
 
 ```bash
 curl -sS http://<pod>:<port>/v1/chat/completions \
@@ -131,9 +132,11 @@ curl -sS http://<pod>:<port>/v1/chat/completions \
        "skip_special_tokens": false, "max_tokens": 600, "temperature": 0.2}'
 ```
 
-> Streaming + thinking is a known-degraded upstream mode (#38855): the gemma4
-> parser's streaming path matches decoded text, not token ids, so reasoning may
-> leak into `content`. Keep agent reasoning probes non-streaming.
+> Streaming + thinking works: the gemma4 parser's streaming path is
+> token-based, so read `delta.reasoning` in the streamed chunks. (The earlier
+> "#38855 degrades streaming" note was a false alarm — a `reasoning_content`
+> vs `reasoning` field-name confusion; see
+> [`REASONING_CONTENT_38855.md`](../gemma4-moe-vllm/REASONING_CONTENT_38855.md).)
 
 ## What to watch
 

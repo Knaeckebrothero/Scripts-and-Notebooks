@@ -110,7 +110,7 @@ min cold to ~2-3 min warm.
 | `CUDAGRAPH_CAPTURE_SIZES` | `1,2,4,8,16` | Restricts graph capture to realistic agent batches |
 | `LIMIT_MM_PER_PROMPT` | `image=5,audio=0` | Up to 5 images/request. `audio=0` is mandatory — model `config.json` has `audio_config: null` (no audio tower); a non-zero audio limit errors at startup. Higher image caps shrink the 128K KV pool |
 | `TOOL_CALL_PARSER` | `gemma4` | Native Gemma 4 parser |
-| `REASONING_PARSER` | `gemma4` | Extracts thinking content into `reasoning_content` |
+| `REASONING_PARSER` | `gemma4` | Extracts thinking content into `reasoning` |
 | `ENABLE_THINKING` | `true` | Server-side `<\|think\|>` injection |
 | `MIN_VRAM_GB` | `44` | Warns below; bump to 110 for BF16 override |
 | `MIN_DISK_GB` | `40` | Warns if free space at `HF_HOME` is below this — a cold download needs ~31 GB + Xet staging. `SKIP_DISK_CHECK=true` silences on a warm volume |
@@ -148,13 +148,15 @@ For INT4 AWQ on Ada-class hardware, see the
 - **Multimodal inputs** (image/video) work through the standard vLLM chat
   API with `{"type": "image_url", "image_url": {"url": "..."}}`. The
   `gemma4` parser doesn't affect multimodal paths — test separately.
-- **Reasoning extraction requires `"skip_special_tokens": false`** in the
-  client request — otherwise `<|channel|>` delimiters are stripped before
-  the gemma4 reasoning parser sees them (vLLM Issue #38855). The
-  `model-orchestrator` injects this for the Gemma 4 routes; direct callers
-  must send it. **Streaming caveat:** #38855 still affects the streaming
-  parser path, so with `stream=true` reasoning may surface inline in
-  `content` — reliable separation is non-streaming only.
+- **Reasoning extraction and `"skip_special_tokens": false`.** The gemma4
+  reasoning parser's `adjust_request` sets `skip_special_tokens: false`
+  itself, so clients don't need to send it (passing it anyway is harmless) —
+  thought content comes back in the response's `reasoning` field. The
+  `model-orchestrator` also injects it for the Gemma 4 routes. **Streaming
+  works:** the parser's streaming path is token-based, so read
+  `delta.reasoning` in the streamed chunks. (#38855 was a false alarm — a
+  `reasoning_content` vs `reasoning` field-name confusion, now resolved; see
+  [`../gemma4-moe-vllm/REASONING_CONTENT_38855.md`](../gemma4-moe-vllm/REASONING_CONTENT_38855.md).)
 
 ## RunPod deployment
 

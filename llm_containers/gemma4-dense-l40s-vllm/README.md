@@ -104,7 +104,7 @@ Before promoting, run the three checks from the L40S report:
 
 ### 1. Reasoning-parser isolation
 
-Confirms `<|channel|>thought\n` is routed to `reasoning_content`, not leaked
+Confirms `<|channel|>thought\n` is routed to `reasoning`, not leaked
 into the user-facing `content` field.
 
 ```bash
@@ -120,13 +120,15 @@ curl -k -X POST http://localhost:8000/v1/chat/completions \
   }'
 ```
 
-Validation: response payload contains a non-empty `reasoning_content` key
-*and* the final numerical answer in `content`. **Required: client must send
-`"skip_special_tokens": false`** — otherwise `<|channel|>` delimiters are
-stripped before the parser sees them (vLLM Issue #38855). In production the
-`model-orchestrator` injects this for the Gemma 4 routes. **Streaming caveat:**
-#38855 still affects the streaming parser path, so this probe is reliable for
-non-streaming (`stream=false`) only.
+Validation: response payload contains a non-empty `reasoning` key
+*and* the final numerical answer in `content`. The gemma4 parser's
+`adjust_request` sets `"skip_special_tokens": false` itself, so the client
+doesn't need to send it (the probe includes it, which is harmless). In
+production the `model-orchestrator` also injects it for the Gemma 4 routes.
+**Streaming works:** the parser's streaming path is token-based — read
+`delta.reasoning` in the streamed chunks. (#38855 was a false alarm — a
+`reasoning_content` vs `reasoning` field-name confusion, now resolved; see
+[`../gemma4-moe-vllm/REASONING_CONTENT_38855.md`](../gemma4-moe-vllm/REASONING_CONTENT_38855.md).)
 
 ### 2. Parallel tool calling
 

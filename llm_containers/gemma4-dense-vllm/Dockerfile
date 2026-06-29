@@ -26,9 +26,10 @@
 #     TRITON_ATTN there. FA3 on Hopper/Blackwell handles it natively.
 #
 # GPU compatibility (at default FP8 weights / 128K context / BF16 KV):
-#   - A100-80GB (sm_80):  1 concurrent 128K sequence + ~5% headroom (~42.7 GB / ~45 GB pool, 0.95 util).
-#                         For >1 concurrent agent, queue externally or lower
-#                         MAX_MODEL_LEN (e.g. 65536 → 2 concurrent fit).
+#   - A100-80GB (sm_80):  2 concurrent 128K sequences (MEASURED 2026-06: vLLM
+#                         reports max concurrency 2.24x for 131072 tokens at 0.95
+#                         util). MAX_NUM_SEQS defaults to 2; for more, queue
+#                         externally or lower MAX_MODEL_LEN.
 #   - H100/H200 (sm_90):  full 128K with concurrency headroom; native FP8 TC,
 #                         but KV must stay BF16 (vLLM Issue #40388).
 #   - B200 (sm_100):      FP4 weights path possible, but this image stays on
@@ -41,8 +42,10 @@
 # (#38992, #38909, #39114 — silent JSON corruption, infinite <pad> loops) and
 # adds the streaming-after-tool-results reasoning leak fix (#39885), tool-call
 # float-corruption fix (#42128), and mixed-resolution image co-batching fix
-# (#42217). Reasoning still needs client-side skip_special_tokens=false
-# (vLLM #38855, open) — see entrypoint.sh.
+# (#42217). Reasoning works out of the box — the chain-of-thought is returned
+# in the response `reasoning` field (NOT the deprecated `reasoning_content`);
+# the parser auto-keeps the <|channel> markers via adjust_request. #38855 was a
+# field-name false alarm — see gemma4-moe-vllm/REASONING_CONTENT_38855.md.
 FROM vllm/vllm-openai:v0.22.0
 
 ENV PYTHONUNBUFFERED=1
