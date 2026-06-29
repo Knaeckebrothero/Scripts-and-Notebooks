@@ -98,6 +98,17 @@ def _make_client(proxy: Optional[str]) -> httpx.AsyncClient:
 def get_client(proxy: Optional[str]) -> httpx.AsyncClient:
     return http_clients.get(proxy) or http_clients[None]
 
+# Chat/vision prefills can run for minutes on long contexts (128K ≈ 150-250s on
+# the emulated-FP8 cluster backend) with NO bytes flowing until the first token,
+# so the read timeout must exceed the worst-case prefill or the stream aborts
+# with "Backend unavailable". connect stays tight so a dead backend still fails
+# fast. Passed per-request from chat_completions; this is what httpx actually
+# applies — it overrides the _make_client() default above, so that 120s default
+# is NOT the knob to change for chat. Tunable via env (no rebuild needed).
+CHAT_TIMEOUT = httpx.Timeout(
+    float(os.getenv("CHAT_READ_TIMEOUT_S", "600")), connect=10.0
+)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Manage application lifespan."""
@@ -528,7 +539,7 @@ async def proxy_request(
     files: Optional[Dict] = None,
     data: Optional[Dict] = None,
     stream: bool = False,
-    timeout: float = 120.0,
+    timeout: Union[float, httpx.Timeout] = 120.0,
     endpoint_override: Optional[str] = None,
     rate_limit: bool = True,
 ) -> Response:
@@ -1019,6 +1030,7 @@ async def chat_completions(req: Request):
         rpm=rpm,
         payload=payload,
         stream=stream,
+        timeout=CHAT_TIMEOUT,
     )
 
 @app.post("/v1/embeddings")
