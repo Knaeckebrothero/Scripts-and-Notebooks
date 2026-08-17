@@ -102,6 +102,29 @@ routes:
       chat_template_kwargs:
         enable_thinking: true
 
+  # Chat model with NO request_defaults (Muse Glimmer) — contrast with above
+  # ----------------------------------------------------------------------
+  # Muse Glimmer needs the opposite treatment to Gemma 4. Its vLLM reasoning
+  # parser (`--reasoning-parser muse_glimmer`) sets `skip_special_tokens: false`
+  # itself, so the gateway must NOT inject it — and reasoning strength is
+  # selected in the *system prompt* (low|medium|high|xhigh), not via
+  # `chat_template_kwargs`. So this route carries no `request_defaults` at all.
+  #
+  # Sampling matters here: it is a reasoning model that must not run greedy
+  # (Meta's recipe is temperature 1.0 / top_p 0.95 / top_k 64, served from the
+  # repo's generation_config.json via the container's `--generation-config
+  # auto`). The gateway deliberately does not pin sampling — a client that
+  # sends temperature 0 will get degraded, non-deterministic output anyway.
+  - name: "Muse-Glimmer-30B"
+    type: "chat"
+    backend: "http://127.0.0.1:8092"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "RedHatAI/Muse-Glimmer-30B-FP8-block"
+    models:
+      - "muse-glimmer-30b"
+      - "muse-glimmer"
+    owned_by: "meta"
+
   # Speech-to-text
   # `health_path: null` disables /health probing for this backend — the
   # default Whisper server image doesn't expose /health, so the router's

@@ -1,0 +1,97 @@
+# muse-glimmer-gpu2.container — Muse Glimmer 30B on L40S #2 (GPU 2)
+# FP8-block weights (~32.1 GiB) + bf16 KV at 128K context, TP=1.
+#
+# Replaces gemma4-moe-gpu2.container on this GPU. Deploy checklist:
+#   1. systemctl --user stop gemma4-moe-gpu2 && systemctl --user disable ...
+#      (keep the .container file — roll back by re-enabling it)
+#   2. Free disk FIRST — see README "Disk budget"; the pull needs ~45 GB.
+#   3. cp this file to ~/.config/containers/systemd/ (llmprod)
+#   4. Fill in HUGGING_FACE_HUB_TOKEN below (do NOT commit a real token)
+#   5. systemctl --user daemon-reload && systemctl --user start muse-glimmer-gpu2
+#   6. Drop 127.0.0.1:8089 from the Gemma4-MoE-*-Pool routes in the router
+#      config and add the Muse-Glimmer-30B route on 127.0.0.1:8092.
+#
+# NOTE the port change: 8089 (the old Gemma sister pod) is deliberately NOT
+# reused. Muse Glimmer gets its own port 8092 so the router keeps a clean,
+# separate route instead of a pool with two different model families in it.
+#
+# 8092 specifically: this box is shared with other tenants who already hold
+# 8050-8060, 8084, 8200, 8443, 8888 and 8890/8891, so the "obvious" next
+# ports were not actually free. Verified free with `ss -tln` on 2026-08-17 —
+# re-check before deploying, it is not our machine alone.
+
+[Unit]
+Description=Muse Glimmer 30B FP8 (GPU 2)
+After=network-online.target
+Wants=network-online.target
+# Do not co-schedule with the pod this one replaces.
+Conflicts=gemma4-moe-gpu2.service
+
+[Container]
+ContainerName=muse-glimmer-gpu2
+Image=ghcr.io/knaeckebrothero/muse-glimmer-vllm:latest
+AutoUpdate=registry
+
+# GPU 2 (L40S #2)
+AddDevice=nvidia.com/gpu=2
+
+# Host network — listens on PORT inside container
+Network=host
+
+# Shared HF cache — same directory the Gemma pods use (~27 GB in use today;
+# Muse Glimmer FP8 adds ~34 GB on top).
+Volume=/home/llmprod/hf-cache:/mnt/cache/huggingface:z
+
+# Persistent torch.compile + Triton block-FP8 autotune cache. Worth its own
+# mount here: on Ada the block-FP8 GEMM autotune is a large slice of the
+# ~15 min cold boot, and the Gemma pods never needed it (per-tensor FP8).
+# WIPE THIS DIR whenever the image is bumped — stale graphs fail silently.
+Volume=/home/llmprod/vllm-cache-muse:/mnt/cache/vllm:z
+
+# vLLM IPC needs more than the 64 MB default
+ShmSize=8g
+
+# === Model + serving config (consumed by container entrypoint) ===
+Environment=HUGGING_FACE_HUB_TOKEN=REPLACE_ME
+
+# Only 8-bit repo that exists for this model (compressed-tensors, 128x128
+# weight blocks + dynamic per-group activations). ~32.1 GiB of weights.
+Environment=MODEL=RedHatAI/Muse-Glimmer-30B-FP8-block
+Environment=MAX_MODEL_LEN=131072
+
+# bf16 KV on purpose. At ~1.70 GiB per full-128K session we do not need fp8
+# KV, and skipping it avoids the Ada FA2-rejects-fp8_e4m3-with-SWA trap that
+# forced the Gemma pods onto TRITON_ATTN.
+Environment=KV_CACHE_DTYPE=auto
+Environment=VLLM_ATTENTION_BACKEND_OVERRIDE=FLASH_ATTN
+
+# 0.95 of 45 GiB = 42.7 GiB cap; weights take 32.1 -> ~6.5 GiB for KV after
+# activations and CUDA graphs. That is 3-4 concurrent full-length sessions.
+Environment=GPU_MEMORY_UTILIZATION=0.95
+
+# Sized for the 1-2 concurrent sessions this pod is meant to serve; 4 leaves
+# headroom without letting the scheduler oversubscribe the KV pool.
+Environment=MAX_NUM_SEQS=4
+Environment=MAX_NUM_BATCHED_TOKENS=8192
+
+# Default 40 GB threshold trips on L40S 45 GiB — silence it
+Environment=SKIP_VRAM_CHECK=true
+
+Environment=PORT=8092
+Environment=HOST=0.0.0.0
+
+# 30B dense + first-boot Triton autotune: allow a long start period.
+HealthCmd=curl -f http://localhost:8092/health
+HealthInterval=60s
+HealthTimeout=30s
+HealthStartPeriod=1200s
+HealthRetries=5
+
+[Service]
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=2400
+TimeoutStopSec=120
+
+[Install]
+WantedBy=default.target

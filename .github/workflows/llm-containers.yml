@@ -4,12 +4,13 @@ name: llm-containers
 #
 # Triggers:
 #   - push to main when files under llm_containers/ (or this workflow) change
-#   - manual workflow_dispatch (always builds all six)
+#   - manual workflow_dispatch (always builds all of them)
 #
 # Images:
 #   ghcr.io/knaeckebrothero/gemma4-dense-vllm
 #   ghcr.io/knaeckebrothero/gemma4-dense-l40s-vllm
 #   ghcr.io/knaeckebrothero/gemma4-moe-vllm
+#   ghcr.io/knaeckebrothero/muse-glimmer-vllm
 #   ghcr.io/knaeckebrothero/gemma4-moe-strix-llamacpp
 #   ghcr.io/knaeckebrothero/gemma4-dense-strix-llamacpp
 #   ghcr.io/knaeckebrothero/qwen3-next-vllm
@@ -35,6 +36,7 @@ on:
       - 'llm_containers/gemma4-dense-vllm/**'
       - 'llm_containers/gemma4-dense-l40s-vllm/**'
       - 'llm_containers/gemma4-moe-vllm/**'
+      - 'llm_containers/muse-glimmer-vllm/**'
       - 'llm_containers/gemma4-moe-strix-llamacpp/**'
       - 'llm_containers/gemma4-dense-strix-llamacpp/**'
       - 'llm_containers/qwen3-next-vllm/**'
@@ -64,6 +66,7 @@ jobs:
           - gemma4-dense-vllm
           - gemma4-dense-l40s-vllm
           - gemma4-moe-vllm
+          - muse-glimmer-vllm
           - gemma4-moe-strix-llamacpp
           - gemma4-dense-strix-llamacpp
           - qwen3-next-vllm
