@@ -132,6 +132,48 @@ Gemma 4 pods onto `TRITON_ATTN`. Here we stay on `FLASH_ATTN`.
 > OpenAI-style structured outputs) will silently get prose. Any branch on
 > `finish_reason == "tool_calls"` will misfire.
 >
+> ### Upstream status (checked 2026-08-17)
+>
+> **The non-enforcement is deliberate, not a regression.** PR #51655 sets
+> `supports_required_and_named=False` for the `muse_glimmer` parser:
+>
+> > "`tool_choice="required"` and named tool_choice set
+> > `supports_required_and_named=False` so vLLM does not apply JSON guided
+> > decoding to them — that path assumes JSON tool calls, and forcing it here
+> > either trapped the call in the reasoning channel or leaked the raw framing
+> > into content."
+>
+> So there is no fix to wait for; it needs the region-scoped / tool-aware
+> grammar work to land. This affects a whole family of XML-native parsers, not
+> just this model — see vLLM
+> [#49712](https://github.com/vllm-project/vllm/issues/49712) (generic),
+> [#50477](https://github.com/vllm-project/vllm/issues/50477) (**gemma4** —
+> our other production pod), [#51804](https://github.com/vllm-project/vllm/issues/51804)
+> (step3p5), [#48095](https://github.com/vllm-project/vllm/issues/48095) (GLM).
+> All open.
+>
+> **The `finish_reason` lie is a separate, genuine bug** and is independently
+> reported on Gemma 4 in #50477 with the identical signature we measured:
+> HTTP 200, `finish_reason: "tool_calls"`, prose in `content`, no `tool_calls`.
+> Open, unfixed.
+>
+> **Structured outputs (`response_format`) are silently dropped too** — verified
+> here: `json_schema` (strict) and `json_object` both returned prose in a
+> markdown fence, HTTP 200. This is vLLM
+> [#52594](https://github.com/vllm-project/vllm/issues/52594), filed against the
+> *same commit-pinned image we run* (`0.26.1rc1.dev608+g99a10304d`). There is a
+> lever, and it is an either/or:
+>
+> | `structured_outputs.enable_in_reasoning` | `message.reasoning` | JSON schema |
+> |---|---|---|
+> | `True` | ❌ empty (grammar masks from token 0) | ✅ enforced |
+> | `False` (our default) | ✅ correct | ❌ silently not enforced |
+>
+> It is a **server-level** flag (`--structured-outputs-config`, field confirmed
+> present in our image), so it is all-or-nothing for the pod. We keep the
+> default: reasoning is the reason to run this model. If a pipeline needs
+> guaranteed JSON, parse it out of the fenced block, or use a Gemma route.
+>
 > **Workaround:** use `tool_choice: "auto"` with a prompt that clearly wants
 > the tool, and **branch on `len(message.tool_calls)`, never on
 > `finish_reason`**. Retry when empty. Re-test after moving off this branch
