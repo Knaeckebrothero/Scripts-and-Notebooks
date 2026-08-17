@@ -60,16 +60,40 @@ Only 13 of 52 layers hold full-context KV; the other 39 are capped at the
 | fp8 KV  | 0.813 GiB | 0.038 GiB | **0.85 GiB** |
 
 At `--gpu-memory-utilization 0.95` → 42.7 GiB cap − 32.1 GiB weights ≈ 10.6 GiB,
-of which ~4 GiB goes to activations + CUDA graphs + CUDA context, leaving
-**~6.5 GiB of KV pool ≈ 3–4 concurrent full-128K sessions at bf16 KV.**
+of which ~4 GiB goes to activations + CUDA graphs + CUDA context.
 
-That comfortably clears the 1–2 concurrent target **without** an FP8 KV cache —
-which is the point, because fp8_e4m3 KV + interleaved SWA on Ada is exactly
-what forced the Gemma 4 pods onto `TRITON_ATTN`. Here we stay on `FLASH_ATTN`.
+**Measured on the deployed pod (2026-08-17), and it beat the estimate:**
 
-> If the hybrid/SWA KV manager ever fails to kick in, all 52 layers would hold
-> full-context KV → **6.5 GiB per session**, i.e. exactly one. Check the
-> `# GPU KV cache size` line in the boot log against the table above.
+```
+Model loading took 32.39 GiB and 6.456767 seconds
+Available KV cache memory: 7.88 GiB
+GPU KV cache size: 447,181 tokens
+Maximum concurrency for 131,072 tokens per request: 3.41x
+```
+
+447,181 tokens in 7.88 GiB is ~18.5 KiB/token. Full-context KV on all 52 layers
+would be 52 KiB/token — at 36 % of that, the **hybrid SWA allocator is
+confirmed working** (13 global + 39 windowed). If a future vLLM bump regresses
+that, this line drops to ~158 k tokens / 1.2x concurrency; watch it.
+
+That clears the 1–2 concurrent target **without** an FP8 KV cache — which is the
+point, because fp8_e4m3 KV + interleaved SWA on Ada is exactly what forced the
+Gemma 4 pods onto `TRITON_ATTN`. Here we stay on `FLASH_ATTN`.
+
+### Verified end-to-end (2026-08-17, deployed pod)
+
+| Check | Result |
+|---|---|
+| Reasoning split into `reasoning` field | ✓ no `<|channel>` leak into `content` |
+| ATEM XML tool call → OpenAI JSON | ✓ `get_weather{"city":"Frankfurt am Main","unit":"celsius"}`, `finish_reason: tool_calls` |
+| Long context | ✓ **118,057-token prompt**, needle retrieved, 47.2 s end-to-end (~2.5k tok/s prefill) |
+| Block-FP8 on Ada (Triton fallback) | ✓ runs; prefill throughput acceptable, not benchmarked against per-tensor FP8 |
+
+> **Watch the reasoning budget.** With `Reasoning: high` and a hard question,
+> the model can spend the entire `max_tokens` inside the reasoning channel and
+> return `content: null` with `finish_reason: length` — observed on the first
+> test. This is the PR's "reasoning may never end" caveat in practice. Give
+> agent calls generous `max_tokens` (2000+) or use `Reasoning: low`/`medium`.
 
 ## Quick start
 
@@ -146,21 +170,29 @@ docker run --gpus all -p 8000:8000 --ipc=host \
   during review, and **unverified on Ada**. Off by default; it is the single
   most promising latency win to test *after* the base deployment is stable.
 
-## Disk budget (university server, `llmprod`)
+## Disk layout (university server, `llmprod`)
 
-The root filesystem was at **97 % (18 GB free)** when this was written, and the
-pull needs roughly **45 GB** (34 GB weights + ~10 GB image). Reclaimable, but
-it needs a decision — these are model caches, not garbage:
+**Model weights belong on `/data` (16 TB HDD), not on `/` (445 GB SSD).**
+Root was at 97 % / 18 GB free before this deployment, because the Gemma pods
+cached into `/home/llmprod/hf-cache` on the SSD.
+
+Watch out for the trap that caused it: `/data/hf-cache` (admin-owned, 81 GB,
+`container_file_t`) looks like the shared cache everyone should use, but it is
+mode 0755 `admin:admin` and **`llmprod` cannot write to it** — there is a
+`test_permission.txt` from 2025-12-24 where someone discovered this the hard
+way and gave up. Until an admin makes it group-writable for `ai-ops`, llmprod
+uses its own `/data/llmprod/hf-cache`.
+
+Cleanup performed 2026-08-17 (18 GB → 133 GB free on root):
 
 | Item | Size | Notes |
 |---|---|---|
-| `gpt-oss-cache` podman volume | 26 GB | orphaned, 0 containers attached |
-| `vision-cache` podman volume | 24 GB | orphaned, 0 containers attached |
+| `gpt-oss-20b` container | 27.8 GB | exited 3 months, quadlet already retired |
+| `gpt-oss-cache` volume | 26 GB | orphaned, 0 containers attached |
+| `vision-cache` volume | 24 GB | orphaned (retired Pixtral pod) |
+| `vllm/vllm-openai:latest` | 19.6 GB | only used by the removed gpt-oss container |
 | `gemma4-moe-vllm:sha-9931789` | 22.7 GB | superseded by `sha-fab4043` (running) |
 | dangling images | 5.8 GB | safe |
-
-Freeing the two orphaned volumes alone covers it. Deleting them means
-re-downloading those weights if the retired gpt-oss / Pixtral pods ever return.
 
 ## Deployment
 

@@ -4,7 +4,8 @@
 # Replaces gemma4-moe-gpu2.container on this GPU. Deploy checklist:
 #   1. systemctl --user stop gemma4-moe-gpu2 && systemctl --user disable ...
 #      (keep the .container file — roll back by re-enabling it)
-#   2. Free disk FIRST — see README "Disk budget"; the pull needs ~45 GB.
+#   2. Free disk FIRST — see README "Disk layout"; the pull needs ~35 GB on
+#      /data (weights) plus ~10 GB on / (image layers).
 #   3. cp this file to ~/.config/containers/systemd/ (llmprod)
 #   4. Fill in HUGGING_FACE_HUB_TOKEN below (do NOT commit a real token)
 #   5. systemctl --user daemon-reload && systemctl --user start muse-glimmer-gpu2
@@ -38,15 +39,25 @@ AddDevice=nvidia.com/gpu=2
 # Host network — listens on PORT inside container
 Network=host
 
-# Shared HF cache — same directory the Gemma pods use (~27 GB in use today;
-# Muse Glimmer FP8 adds ~34 GB on top).
-Volume=/home/llmprod/hf-cache:/mnt/cache/huggingface:z
+# HF cache lives on the 16 TB HDD (/data), NOT on the 445 GB root SSD.
+# The Gemma pods originally cached into /home/llmprod/hf-cache and were the
+# main reason root sat at 97 %. Both pods now point here.
+#   NOTE: /data/hf-cache (no llmprod/) is a SEPARATE, admin-owned shared cache
+#   that llmprod cannot write to — that is why the move never happened before.
+#   Do not "fix" this path to that one without sorting the group perms first.
+Volume=/data/llmprod/hf-cache:/mnt/cache/huggingface:z
 
 # Persistent torch.compile + Triton block-FP8 autotune cache. Worth its own
 # mount here: on Ada the block-FP8 GEMM autotune is a large slice of the
 # ~15 min cold boot, and the Gemma pods never needed it (per-tensor FP8).
 # WIPE THIS DIR whenever the image is bumped — stale graphs fail silently.
-Volume=/home/llmprod/vllm-cache-muse:/mnt/cache/vllm:z
+Volume=/data/llmprod/vllm-cache-muse:/mnt/cache/vllm:z
+
+# Both are needed. VLLM_CACHE_ROOT is the one torch.compile actually uses;
+# VLLM_CONFIG_ROOT alone leaves the compiled graphs in the container's own
+# /root/.cache/vllm, so every restart pays the full ~58 s recompile.
+Environment=VLLM_CACHE_ROOT=/mnt/cache/vllm
+Environment=VLLM_CONFIG_ROOT=/mnt/cache/vllm
 
 # vLLM IPC needs more than the 64 MB default
 ShmSize=8g

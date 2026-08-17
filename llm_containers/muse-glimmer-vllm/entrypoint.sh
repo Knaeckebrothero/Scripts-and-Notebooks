@@ -38,7 +38,13 @@ set -e
 # muse-glimmer branch build -> v0.28.0) or the model repo is re-uploaded.
 export HF_HOME="${HF_HOME:-/mnt/cache/huggingface}"
 export VLLM_CONFIG_ROOT="${VLLM_CONFIG_ROOT:-/mnt/cache/vllm}"
-mkdir -p "${HF_HOME}" "${VLLM_CONFIG_ROOT}"
+# VLLM_CACHE_ROOT is the one that actually matters for torch.compile: vLLM
+# writes torch_compile_cache/ under it (default ~/.cache/vllm, i.e. INSIDE the
+# container = thrown away on every restart). VLLM_CONFIG_ROOT only covers
+# ~/.config/vllm. Verified on 2026-08-17: with only CONFIG_ROOT set, the boot
+# log still reported "Using cache directory: /root/.cache/vllm/...".
+export VLLM_CACHE_ROOT="${VLLM_CACHE_ROOT:-/mnt/cache/vllm}"
+mkdir -p "${HF_HOME}" "${VLLM_CONFIG_ROOT}" "${VLLM_CACHE_ROOT}"
 
 # Skip the 60s peer-to-peer GPU connectivity probe — irrelevant at TP=1.
 export VLLM_SKIP_P2P_CHECK="${VLLM_SKIP_P2P_CHECK:-1}"
@@ -281,6 +287,7 @@ echo "Generation config: ${GENERATION_CONFIG}"
 echo "DFlash spec-dec:   ${ENABLE_DFLASH}"
 echo "HF_HOME:           ${HF_HOME}"
 echo "VLLM_CONFIG_ROOT:  ${VLLM_CONFIG_ROOT}"
+echo "VLLM_CACHE_ROOT:   ${VLLM_CACHE_ROOT}"
 echo "Endpoint:          http://${HOST}:${PORT}/v1"
 echo "=============================================="
 
