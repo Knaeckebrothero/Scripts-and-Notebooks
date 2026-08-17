@@ -89,6 +89,54 @@ Gemma 4 pods onto `TRITON_ATTN`. Here we stay on `FLASH_ATTN`.
 | Long context | ✓ **118,057-token prompt**, needle retrieved, 47.2 s end-to-end (~2.5k tok/s prefill) |
 | Block-FP8 on Ada (Triton fallback) | ✓ runs; prefill throughput acceptable, not benchmarked against per-tensor FP8 |
 
+### Tool calling — tested in depth (2026-08-17)
+
+| Case | Result |
+|---|---|
+| Mixed-type schema (int / bool / enum / array / number) | ✓ types survive: `passengers` int, `flexible_dates` bool, `meal_prefs` list, `max_price_eur` float |
+| Tool selection among 3 candidates | ✓ picked `calculate` for an arithmetic prompt |
+| Negative control (told not to use tools) | ✓ no spurious call |
+| **Multi-turn** — feed `role:"tool"` result back | ✓ consumed the result, correct prose answer, no `<|channel>` leak |
+| **Parallel** calls in one response | ✓ 2 calls, distinct `id`s |
+| **Streaming** tool call | ✓ name + argument fragments reassemble into valid JSON |
+| `tool_choice: "auto"` / `"none"` | ✓ correct |
+| **`tool_choice: "required"`** | ✗ **not enforced** — see below |
+| **`tool_choice: {named function}`** | ✗ **not enforced** — see below |
+
+> ### ⚠ Forced `tool_choice` is advisory, not enforced (this build)
+>
+> `tool_choice: "required"` and named `tool_choice` do **not** constrain
+> decoding. When the prompt doesn't naturally call for the tool, the model
+> answers in prose and the call is simply omitted. Worse, the envelope
+> contradicts itself:
+>
+> ```
+> case                     finish_reason  n_calls
+> required + ON-topic      tool_calls     1        OK
+> required + OFF-topic     tool_calls     0        *** MISMATCH ***
+> required + OFF, high     tool_calls     0        *** MISMATCH ***
+> ```
+>
+> A response can carry `finish_reason: "tool_calls"` with an **empty**
+> `tool_calls` array (and prose in `content`). Named `tool_choice` shows the
+> inverse too: a real call returned with `finish_reason: "stop"`. Reasoning
+> strength makes no difference.
+>
+> This is the PR #51655 review note — "reasoning may never end without tool
+> calls, potentially skipping grammar application" — showing up in practice:
+> the guided-decoding grammar that implements forced tool choice never gets
+> applied.
+>
+> **Consequence for agent code:** anything that relies on forced tool choice
+> for structured extraction or routing (LangChain `bind_tools(tool_choice=…)`,
+> OpenAI-style structured outputs) will silently get prose. Any branch on
+> `finish_reason == "tool_calls"` will misfire.
+>
+> **Workaround:** use `tool_choice: "auto"` with a prompt that clearly wants
+> the tool, and **branch on `len(message.tool_calls)`, never on
+> `finish_reason`**. Retry when empty. Re-test after moving off this branch
+> build — `auto` mode, which is what most agent loops actually use, is solid.
+
 > **Watch the reasoning budget.** With `Reasoning: high` and a hard question,
 > the model can spend the entire `max_tokens` inside the reasoning channel and
 > return `content: null` with `finish_reason: length` — observed on the first
