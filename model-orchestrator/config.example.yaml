@@ -106,9 +106,14 @@ routes:
   # ----------------------------------------------------------------------
   # Muse Glimmer needs the opposite treatment to Gemma 4. Its vLLM reasoning
   # parser (`--reasoning-parser muse_glimmer`) sets `skip_special_tokens: false`
-  # itself, so the gateway must NOT inject it — and reasoning strength is
-  # selected in the *system prompt* (low|medium|high|xhigh), not via
-  # `chat_template_kwargs`. So this route carries no `request_defaults` at all.
+  # itself, so the gateway must NOT inject it. So this route carries no
+  # `request_defaults` at all.
+  #
+  # Reasoning strength is a chat-template kwarg and **defaults to `high`**:
+  # clients pass `chat_template_kwargs: {reasoning_strength: low|medium|high|
+  # xhigh}`. OpenAI's `reasoning_effort` and a "Reasoning: low" system message
+  # are both silently ignored (verified 2026-08-21). Deliberately NOT injected
+  # here as a default -- `high` is why you run this model; let callers opt down.
   #
   # Sampling matters here: it is a reasoning model that must not run greedy
   # (Meta's recipe is temperature 1.0 / top_p 0.95 / top_k 64, served from the

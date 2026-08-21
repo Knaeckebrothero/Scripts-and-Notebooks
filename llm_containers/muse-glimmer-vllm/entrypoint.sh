@@ -21,8 +21,15 @@
 # IMPORTANT: this model is a reasoning model and MUST NOT be run greedy.
 # Meta's sampling recipe is temperature 1.0 / top_p 0.95 / top_k 64, shipped in
 # the repo's generation_config.json — `--generation-config auto` picks it up.
-# Reasoning strength (low|medium|high|xhigh) is selected via the SYSTEM PROMPT,
-# not via chat-template kwargs (this differs from Gemma 4's enable_thinking).
+# Reasoning strength is selected with the chat-template kwarg
+# `reasoning_strength` (low|medium|high|xhigh) -- NOT with OpenAI's
+# `reasoning_effort`, and NOT by writing "Reasoning: low" in a system message.
+# Both of those are silently ignored. Verified 2026-08-21 by rendering prompts
+# through /tokenize + /detokenize: the template macro reads
+# `reasoning_strength` and DEFAULTS TO 'high', then appends the literal line
+# "Reasoning strength: X." after any system text you supply -- so a system
+# message saying otherwise is inert prose that the appended line overrides.
+#   correct: "chat_template_kwargs": {"reasoning_strength": "low"}
 
 set -e
 

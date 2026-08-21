@@ -183,7 +183,8 @@ Gemma 4 pods onto `TRITON_ATTN`. Here we stay on `FLASH_ATTN`.
 > the model can spend the entire `max_tokens` inside the reasoning channel and
 > return `content: null` with `finish_reason: length` — observed on the first
 > test. This is the PR's "reasoning may never end" caveat in practice. Give
-> agent calls generous `max_tokens` (2000+) or use `Reasoning: low`/`medium`.
+> agent calls generous `max_tokens` (2000+), or lower the reasoning strength
+> with `chat_template_kwargs` (see below — the default is `high`).
 
 ## Quick start
 
@@ -239,11 +240,56 @@ docker run --gpus all -p 8000:8000 --ipc=host \
   temperature 1.0 / top_p 0.95 / top_k 64. Identical requests at temperature 0
   were reported to return varying token counts. `--generation-config auto`
   handles this — don't let a client override temperature to 0.
-- **Reasoning strength lives in the system prompt** (`low` | `medium` | `high` |
-  `xhigh`), *not* in `chat_template_kwargs`. This differs from Gemma 4's
-  `enable_thinking` and means the router needs **no `request_defaults`** for
-  this route: the `muse_glimmer` reasoning parser sets
-  `skip_special_tokens=False` itself.
+- **Reasoning strength is a chat-template kwarg, and it defaults to `high`.**
+  The template macro is:
+
+  ```jinja
+  {%- set rs = reasoning_strength if reasoning_strength is defined and reasoning_strength else 'high' -%}
+  {{- 'Reasoning strength: ' + rs + '.' -}}
+  ```
+
+  So the **only** knob that works is:
+
+  ```json
+  "chat_template_kwargs": {"reasoning_strength": "low"}
+  ```
+
+  Two plausible-looking alternatives are **silently ignored** — verified
+  2026-08-21 by rendering prompts through `/tokenize` + `/detokenize`:
+
+  | Sent | Actually rendered |
+  |---|---|
+  | *(nothing)* | `Reasoning strength: high.` |
+  | `"reasoning_effort": "low"` | `Reasoning strength: high.` |
+  | `"reasoning_effort": "xhigh"` | `Reasoning strength: high.` |
+  | system message `"Reasoning: low"` | `Reasoning strength: high.` |
+  | `chat_template_kwargs {"reasoning_strength":"low"}` | `Reasoning strength: low.` |
+
+  The system-message form is a trap: the template renders your text and then
+  appends its own directive *after* it, so the appended line wins —
+
+  ```
+  <|start|>system<|message|>Reasoning: low
+
+  Reasoning strength: low.
+  ```
+
+  Note the router still needs **no `request_defaults`** for this route: the
+  `muse_glimmer` reasoning parser sets `skip_special_tokens=False` itself.
+
+  **The default costs ~3x latency.** Same ~15k-token DeepEval judge payload
+  through the gateway, `reasoning_effort` removed, only the real knob varied:
+
+  | `reasoning_strength` | Wall | Reasoning | Completion | Valid JSON |
+  |---|---|---|---|---|
+  | `high` (default) | 121.0 s | 6,257 ch | 2,107 tok | ✓ |
+  | `low` | 41.0 s | 446 ch | 651 tok | ✓ |
+  | `low` (repeat) | 40.4 s | 466 ch | 703 tok | ✓ |
+
+  For extraction/judge/classification work — anything where the answer is
+  short and the reasoning is not the deliverable — `low` is ~3x faster at no
+  cost to output validity. Tell API consumers about this knob; without it they
+  silently pay for `high` on every call.
 - **Both parsers are required together.** Without them the ATEM tool-call XML
   and the reasoning channel both collapse into `content`.
 - **FLASHINFER is unsupported** — kernels fail at startup (PR #51655 review).
