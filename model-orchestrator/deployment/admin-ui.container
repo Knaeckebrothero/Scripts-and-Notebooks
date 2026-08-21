@@ -12,6 +12,10 @@ Wants=network-online.target
 [Container]
 ContainerName=orchestrator-admin-ui
 Image=ghcr.io/knaeckebrothero/model-orchestrator-admin-ui:latest
+# Auto-update is enabled on this host (podman-auto-update.timer, daily).
+# This unit is on a moving `:latest` tag, so it WILL pick up whatever CI last
+# pushed to main. Restart is ~6s; podman rolls back on healthcheck failure.
+AutoUpdate=registry
 Network=host
 
 EnvironmentFile=%h/.config/model-orchestrator/admin-ui.env

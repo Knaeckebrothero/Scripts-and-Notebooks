@@ -11,21 +11,27 @@ Wants=network-online.target
 
 [Container]
 ContainerName=model-orchestrator
-# NOTE: `:latest` is a *tag*, not a promise. `systemctl --user restart` reuses
-# whatever image is already in local storage — it does NOT re-pull. There is no
-# AutoUpdate= here and podman-auto-update.timer is disabled on the university
-# box, so the local image only changes when someone runs `podman pull`.
+# HISTORY: `:latest` is a tag, not a promise -- `systemctl restart` reuses the
+# local image and does NOT re-pull. That cost us seven weeks: the 600s chat read
+# timeout (commit 936767e, 2026-06-29, pushed to GHCR by CI the same day) sat
+# undeployed behind a 2026-06-12 local image while the router kept enforcing the
+# old 120s default, 503'ing every Muse Glimmer call that needed longer -- which
+# is most DeepEval judge calls, at ~140s each. Found and fixed 2026-08-21.
 #
-# This bit us: the 600s chat read timeout (commit 936767e, 2026-06-29, built and
-# pushed to GHCR by CI the same day) sat undeployed for ~7 weeks behind a
-# 2026-06-12 local image. The router kept enforcing the old 120s default and
-# 503'd every Muse Glimmer request that needed longer -- which is most DeepEval
-# judge calls, they run ~140s. Found 2026-08-21.
+# As of 2026-08-21 podman-auto-update.timer is ENABLED on this host (daily,
+# RandomizedDelaySec=900), so with AutoUpdate=registry below this unit now
+# tracks `:latest` unattended. That means whatever CI last pushed to main
+# reaches this gateway within ~24h without review. Restart is ~6s and podman
+# rolls back on healthcheck failure, but if you want a change gated, pin this
+# to a `sha-<short>` tag instead -- auto-update is then a no-op, exactly as it
+# already is for gemma4-moe-gpu1.
 #
-# TO DEPLOY A CHANGE:  podman pull <image> && systemctl --user restart <unit>
-# TO VERIFY:           podman inspect <ctr> --format '{{.ImageName}} {{.Image}}'
-#                      and diff the running /app/main.py against the repo.
+# MANUAL DEPLOY:  podman pull <image> && systemctl --user restart <unit>
+# VERIFY:         podman inspect <ctr> --format '{{.ImageName}} {{.Image}}'
+#                 and diff the running /app/main.py against the repo.
+# CHECK DRIFT:    podman auto-update --dry-run    (read-only)
 Image=ghcr.io/knaeckebrothero/model-orchestrator:latest
+AutoUpdate=registry
 Network=host
 
 # Read-only bind mount of the YAML config (server + routes; no keys in YAML)

@@ -104,5 +104,14 @@ RestartSec=15
 TimeoutStartSec=2400
 TimeoutStopSec=120
 
+# AutoUpdate=registry above + podman-auto-update.timer means this image can be
+# swapped unattended overnight. The persisted torch.compile cache is only valid
+# for the exact vLLM build that wrote it, and a stale graph fails SILENTLY --
+# no startup error, just wrong kernels. Nothing in podman auto-update knows to
+# invalidate it, so do it here: stamp the image id into the cache dir and clear
+# the compiled graphs whenever it changes. Costs one ~58s recompile after an
+# update; saves debugging silent kernel corruption.
+ExecStartPre=/home/llmprod/bin/vllm-cache-guard.sh ghcr.io/knaeckebrothero/muse-glimmer-vllm:latest /data/llmprod/vllm-cache-muse
+
 [Install]
 WantedBy=default.target
