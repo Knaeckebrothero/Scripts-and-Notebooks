@@ -11,6 +11,20 @@ Wants=network-online.target
 
 [Container]
 ContainerName=model-orchestrator
+# NOTE: `:latest` is a *tag*, not a promise. `systemctl --user restart` reuses
+# whatever image is already in local storage — it does NOT re-pull. There is no
+# AutoUpdate= here and podman-auto-update.timer is disabled on the university
+# box, so the local image only changes when someone runs `podman pull`.
+#
+# This bit us: the 600s chat read timeout (commit 936767e, 2026-06-29, built and
+# pushed to GHCR by CI the same day) sat undeployed for ~7 weeks behind a
+# 2026-06-12 local image. The router kept enforcing the old 120s default and
+# 503'd every Muse Glimmer request that needed longer -- which is most DeepEval
+# judge calls, they run ~140s. Found 2026-08-21.
+#
+# TO DEPLOY A CHANGE:  podman pull <image> && systemctl --user restart <unit>
+# TO VERIFY:           podman inspect <ctr> --format '{{.ImageName}} {{.Image}}'
+#                      and diff the running /app/main.py against the repo.
 Image=ghcr.io/knaeckebrothero/model-orchestrator:latest
 Network=host
 
