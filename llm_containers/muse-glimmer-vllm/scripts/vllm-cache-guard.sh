@@ -19,6 +19,23 @@
 #
 # Usage (from the Quadlet [Service] section):
 #   ExecStartPre=/home/llmprod/bin/vllm-cache-guard.sh <image-ref> <cache-dir>
+#
+# GOTCHA (cost us one silent miss on 2026-08-21): adding ExecStartPre to a
+# .container file does nothing until `systemctl --user daemon-reload` -- Quadlet
+# regenerates the .service from the .container at reload, not at restart. Worse,
+# `AutoUpdate=registry` is baked into the container as the
+# io.containers.autoupdate label at CREATE time, so a unit that predates the
+# flag stays invisible to `podman auto-update` until it is restarted once.
+# After editing either, run:
+#     systemctl --user daemon-reload && systemctl --user restart <unit>
+# then VERIFY, don't assume:
+#     systemctl --user cat <unit> | grep ExecStartPre
+#     podman auto-update --dry-run          # unit must be listed at all
+#     diff <(cat <cache-dir>/.image-id) <(podman inspect <ctr> --format '{{.Image}}')
+#
+# Conservative by design: it keys on the image id, so a rebuild that only
+# changes entrypoint.sh still forces a ~58s recompile even though the vLLM
+# build is identical. That is the safe direction to be wrong in.
 set -euo pipefail
 
 IMAGE="${1:?usage: vllm-cache-guard.sh <image-ref> <cache-dir>}"
