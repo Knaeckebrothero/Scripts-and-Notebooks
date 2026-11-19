@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Delete {{ key.name }}{% endblock %}
+{% block page_class %} page-narrow{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="crumb" href="/keys/{{ key.id }}">Back to {{ key.name }}</a>
+    <h1>Delete this key?</h1>
+  </div>
+</div>
+
+<div class="sheet">
+  <div class="sheet-body form">
+    <dl class="facts">
+      <dt>Key</dt><dd><strong>{{ key.name }}</strong> <span class="prefix">{{ key.key_prefix }}…</span></dd>
+      <dt>Owner</dt><dd>{{ key.owner }}{% if key.owner_email %}, {{ key.owner_email }}{% endif %}</dd>
+      <dt>Status</dt><dd>{{ ui.key_badges(key) }}</dd>
+      <dt>Last used</dt><dd>{% if key.last_used_at %}{{ key.last_used_at|relative(now) }}, {{ key.last_used_at|clock }}{% else %}Never{% endif %}</dd>
+    </dl>
+
+    <div class="notice bad" role="note">
+      {{ ui.icon('alert') }}
+      <div>
+        <p><strong>Deleting cannot be undone.</strong> Clients using this key are rejected within {{ refresh_seconds }} seconds, and the secret can never be issued again.</p>
+        <p>Usage history is kept and stays visible as “Deleted key #{{ key.id }}”.</p>
+      </div>
+    </div>
+
+    {% if key.enabled %}
+    <form class="notice info" method="post" action="/keys/{{ key.id }}/enabled">
+      {{ ui.icon('info') }}
+      <div>
+        <p>To stop the key without losing it, disable it. A disabled key can be enabled again.</p>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="enabled" value="0">
+        <p><button type="submit" class="btn btn-small">Disable instead</button></p>
+      </div>
+    </form>
+    {% endif %}
+
+    <form method="post" action="/keys/{{ key.id }}/delete" class="form" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <div class="field">
+        <label for="confirm_name">Type the key's name to confirm</label>
+        <p class="hint">Enter <strong>{{ key.name }}</strong> exactly as shown.</p>
+        <input class="input" id="confirm_name" name="confirm_name" type="text" value="{{ typed }}" autocomplete="off" autocapitalize="none" spellcheck="false" required
+               data-confirm-match="{{ key.name }}" data-confirm-button="#delete-button"{% if error %} aria-invalid="true" aria-describedby="confirm-error"{% endif %}>
+        {% if error %}<p class="error" id="confirm-error">{{ ui.icon('alert') }}{{ error }}</p>{% endif %}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-danger" id="delete-button">Delete key</button>
+        <a class="btn" href="/keys/{{ key.id }}">Keep the key</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

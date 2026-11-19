@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}{{ 'Edit ' ~ key.name if key else 'Create key' }}{% endblock %}
+{% block page_class %} page-narrow{% endblock %}
+
+{% macro err(name) -%}
+{% if errors.get(name) %}<p class="error" id="{{ name }}-error">{{ ui.icon('alert') }}{{ errors[name] }}</p>{% endif %}
+{%- endmacro %}
+{% macro invalid(name) -%}
+{% if errors.get(name) %} aria-invalid="true" aria-describedby="{{ name }}-error"{% endif %}
+{%- endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="crumb" href="{{ '/keys/' ~ key.id if key else '/keys' }}">{{ 'Back to ' ~ key.name if key else 'Back to keys' }}</a>
+    <h1>{{ 'Edit key' if key else 'Create key' }}</h1>
+    <p class="lede">
+      {% if key %}The secret stays the same. Changes reach the router within {{ refresh_seconds }} seconds.
+      {% else %}The secret is shown once, right after you create the key.{% endif %}
+    </p>
+  </div>
+</div>
+
+{% if errors %}
+<div class="flashes">{{ ui.flash('bad', 'The key was not saved. Check the marked fields.') }}</div>
+{% endif %}
+
+<form class="sheet" method="post" action="{{ '/keys/' ~ key.id ~ '/edit' if key else '/keys/new' }}" novalidate>
+  <div class="sheet-body form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="submission_id" value="{{ submission_id }}">
+
+    <div class="field">
+      <label for="name">Name</label>
+      <p class="hint">What the key is for, so it can be recognised later.</p>
+      <input class="input" id="name" name="name" type="text" value="{{ values.name }}" maxlength="100" placeholder="rag-pipeline-prod" required{{ invalid('name') }}{% if not key %} autofocus{% endif %}>
+      {{ err('name') }}
+    </div>
+
+    <div class="form-row two">
+      <div class="field">
+        <label for="owner">Owner</label>
+        <input class="input" id="owner" name="owner" type="text" value="{{ values.owner }}" maxlength="100" placeholder="Person or team" required{{ invalid('owner') }}>
+        {{ err('owner') }}
+      </div>
+      <div class="field">
+        <label for="owner_email">Owner email <span class="muted">(optional)</span></label>
+        <input class="input" id="owner_email" name="owner_email" type="email" value="{{ values.owner_email }}" maxlength="254" placeholder="name@example.org" autocomplete="off"{{ invalid('owner_email') }}>
+        {{ err('owner_email') }}
+      </div>
+    </div>
+
+    <div class="form-row two">
+      <div class="field">
+        <label for="rate_limit_rpm">Rate limit</label>
+        <p class="hint">Requests per minute.</p>
+        <input class="input short" id="rate_limit_rpm" name="rate_limit_rpm" type="number" inputmode="numeric" min="1" max="1000000" value="{{ values.rate_limit_rpm }}" required{{ invalid('rate_limit_rpm') }}>
+        {{ err('rate_limit_rpm') }}
+      </div>
+      <div class="field">
+        <label for="max_concurrency">Concurrency cap <span class="muted">(optional)</span></label>
+        <p class="hint">Requests in flight at once. Empty means no cap.</p>
+        <input class="input short" id="max_concurrency" name="max_concurrency" type="number" inputmode="numeric" min="1" max="10000" value="{{ values.max_concurrency }}" placeholder="No cap"{{ invalid('max_concurrency') }}>
+        {{ err('max_concurrency') }}
+      </div>
+    </div>
+
+    <fieldset class="field">
+      <legend>Routes this key may use</legend>
+      <div class="choice">
+        <input type="radio" id="access-all" name="access" value="all"{% if values.access != 'some' %} checked{% endif %}>
+        <label for="access-all">All routes, including ones added later</label>
+      </div>
+      <div class="choice">
+        <input type="radio" id="access-some" name="access" value="some"{% if values.access == 'some' %} checked{% endif %}{% if not routes and not stale_routes %} disabled{% endif %}>
+        <label for="access-some">Only these routes</label>
+      </div>
+      {% if routes or stale_routes %}
+      <fieldset class="route-picks" data-route-picks>
+        <legend class="vh">Allowed routes</legend>
+        {% for route in routes %}
+        <div class="choice">
+          <input type="checkbox" id="route-{{ loop.index }}" name="allowed_models" value="{{ route.name }}"{% if route.name in values.allowed_models %} checked{% endif %}>
+          <label for="route-{{ loop.index }}">{{ route.name }} <span class="muted">{{ route.type }}</span></label>
+        </div>
+        {% endfor %}
+        {% for name in stale_routes %}
+        <div class="choice">
+          <input type="checkbox" id="stale-{{ loop.index }}" name="allowed_models" value="{{ name }}"{% if name in values.allowed_models %} checked{% endif %}>
+          <label for="stale-{{ loop.index }}">{{ name }} <span class="muted">no longer configured</span></label>
+        </div>
+        {% endfor %}
+      </fieldset>
+      {% else %}
+      <p class="hint">The router has not reported any routes yet, so only “all routes” is available.</p>
+      {% endif %}
+      {{ err('allowed_models') }}
+    </fieldset>
+
+    <div class="field">
+      <label for="expires_on">Expires on <span class="muted">(optional)</span></label>
+      <p class="hint">The key works until the end of this day, UTC, at most 10 years ahead. Empty means it never expires.</p>
+      <input class="input short" id="expires_on" name="expires_on" type="date" value="{{ values.expires_on }}" min="{{ today|iso if not key else '' }}" max="{{ latest_expiry|iso }}"{{ invalid('expires_on') }}>
+      <div class="inline-buttons js-only">
+        {% for label, value in presets %}
+        <button type="button" class="btn btn-small" data-target="#expires_on" data-set-value="{{ value }}">{{ label }}</button>
+        {% endfor %}
+        <button type="button" class="btn btn-small" data-target="#expires_on" data-set-value="">No expiry</button>
+      </div>
+      {{ err('expires_on') }}
+    </div>
+
+    <div class="field">
+      <label for="notes">Notes <span class="muted">(optional)</span></label>
+      <textarea class="textarea" id="notes" name="notes" maxlength="2000" rows="3"{{ invalid('notes') }}>{{ values.notes }}</textarea>
+      {{ err('notes') }}
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">{{ 'Save changes' if key else 'Create key' }}</button>
+      <a class="btn" href="{{ '/keys/' ~ key.id if key else '/keys' }}">Cancel</a>
+    </div>
+  </div>
+</form>
+{% endblock %}

@@ -1,0 +1,110 @@
+{% macro icon(name, cls='') -%}
+<svg class="icon{% if cls %} {{ cls }}{% endif %}" aria-hidden="true" focusable="false"><use href="#i-{{ name }}"/></svg>
+{%- endmacro %}
+
+{% macro lamp(state) -%}
+<svg class="lamp {{ state }}" aria-hidden="true" focusable="false"><use href="#i-lamp-{{ state }}"/></svg>
+{%- endmacro %}
+
+{# A route's live state: a shaped lamp plus the word, never colour alone. #}
+{% macro route_state(state) -%}
+<span class="state {{ state }}">{{ lamp(state) }}{{ {'up': 'Up', 'down': 'Down', 'unknown': 'No status'}[state] }}</span>
+{%- endmacro %}
+
+{% macro badge(tone, label, icon_name=None) -%}
+<span class="badge {{ tone }}">{% if icon_name %}{{ icon(icon_name) }}{% endif %}{{ label }}</span>
+{%- endmacro %}
+
+{% macro key_badges(key) -%}
+<span class="badges">
+  {{- badge(key.status.tone, key.status.label, {'ok': 'check', 'warn': 'clock', 'bad': 'alert', 'idle': 'pause'}[key.status.tone]) -}}
+  {%- if key.never_used %}{{ badge('idle plain', 'Never used') }}{% endif -%}
+</span>
+{%- endmacro %}
+
+{% macro expiry(key, now) -%}
+{% if key.expires_at %}
+<span class="nowrap">{{ key.expires_at|day }}</span>
+<span class="cell-sub">{{ key.expires_at|relative(now) }}</span>
+{% else %}
+<span class="faint">No expiry</span>
+{% endif %}
+{%- endmacro %}
+
+{% macro meter(percent, cls='neutral') -%}
+<svg class="meter" aria-hidden="true" focusable="false"><rect class="track" width="100%" height="100%" rx="3"/><rect class="fill {{ cls }}" width="{{ percent }}%" height="100%" rx="3"/></svg>
+{%- endmacro %}
+
+{% macro spark(s) -%}
+<svg class="spark" viewBox="0 0 {{ s.count }} 1" preserveAspectRatio="none" role="img" aria-label="{{ s.label }}">
+  <rect class="floor" x="0" y="0.96" width="{{ s.count }}" height="0.04"/>
+  {% for index, y, h in s.bars %}<rect x="{{ index + 0.14 }}" y="{{ y }}" width="0.72" height="{{ h }}"/>{% endfor %}
+</svg>
+{%- endmacro %}
+
+{% macro flash(kind, text) -%}
+<div class="notice {{ kind }}" role="{{ 'alert' if kind in ('bad', 'warn') else 'status' }}">
+  {{ icon({'ok': 'check', 'warn': 'alert', 'bad': 'alert', 'info': 'info'}.get(kind, 'info')) }}
+  <p>{{ text }}</p>
+</div>
+{%- endmacro %}
+
+{% macro change(delta, period) -%}
+{% if delta %}<span class="delta">{{ delta[0] }}</span> on the previous {{ period }}{% else %}No earlier data to compare{% endif %}
+{%- endmacro %}
+
+{# A stacked column chart. Geometry comes from charts.stacked_bars(); the
+   table underneath holds the same numbers for keyboard and screen readers. #}
+{% macro stacked(chart, label, empty='Nothing was recorded in this period.') -%}
+<figure class="chart{% if chart.dense %} dense{% endif %}">
+  {% if chart.empty %}
+  <div class="chart-empty"><p>{{ empty }}</p></div>
+  {% else %}
+  <div class="chart-grid">
+    <div class="chart-y" aria-hidden="true">{% for tick in chart.y_ticks %}<span>{{ tick }}</span>{% endfor %}</div>
+    <svg class="plot" role="img" aria-label="{{ label }}. The table below has the same numbers.">
+      <g class="gridlines">
+        <line x1="0" x2="100%" y1="0" y2="0"/>
+        <line x1="0" x2="100%" y1="25%" y2="25%"/>
+        <line x1="0" x2="100%" y1="50%" y2="50%"/>
+        <line x1="0" x2="100%" y1="75%" y2="75%"/>
+      </g>
+      {% for bar in chart.bars %}
+      <svg class="slot" x="{{ bar.x }}%" width="{{ bar.w }}%" height="100%">
+        <rect class="hit" width="100%" height="100%" data-tip="{{ bar.tip }}"/>
+        {% if bar.segments %}
+        <g class="stack">
+          {% for seg in bar.segments %}<rect class="seg c{{ seg.slot }}" x="14%" width="72%" y="{{ seg.y }}%" height="{{ seg.h }}%"/>{% endfor %}
+        </g>
+        {% endif %}
+      </svg>
+      {% endfor %}
+      <line class="baseline" x1="0" x2="100%" y1="100%" y2="100%"/>
+    </svg>
+    <svg class="chart-x" aria-hidden="true">
+      {% for position, text, anchor in chart.x_ticks %}<text x="{{ position }}%" y="15" text-anchor="{{ anchor }}">{{ text }}</text>{% endfor %}
+    </svg>
+  </div>
+  {% if chart.legend|length > 1 %}
+  <ul class="legend">
+    {% for item in chart.legend %}
+    <li><span class="swatch c{{ item.slot }}"></span>{{ item.label }} <span class="n">{{ item.total|compact }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+  <details class="chart-data">
+    <summary>Show as table</summary>
+    <div class="scroll">
+      <table>
+        <thead><tr>{% for head in chart.table_head %}<th scope="col">{{ head }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for row in chart.table_rows %}
+          <tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </details>
+  {% endif %}
+</figure>
+{%- endmacro %}

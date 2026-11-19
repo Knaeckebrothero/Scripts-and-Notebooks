@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Models{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Models</h1>
+    <p class="lede">Routes the router serves, the model ids clients can ask for, and whether each route is up right now.</p>
+  </div>
+</div>
+
+<div id="models-live" class="stack" hx-get="/models" hx-select="#models-live" hx-target="#models-live" hx-swap="outerHTML"
+     hx-trigger="every 20s" hx-headers='{"X-Passive": "1"}'>
+  {% if not router.configured %}
+  <div class="notice info" role="note">
+    {{ ui.icon('info') }}
+    <div>
+      <p><strong>Live status is off.</strong> Set <code>ADMIN_ROUTER_URL</code> to the router's address to see which routes are up and which model ids it serves.</p>
+      <p class="muted">Routes and usage below come from the database.</p>
+    </div>
+  </div>
+  {% elif not router.reachable %}
+  <div class="notice bad" role="alert">
+    {{ ui.icon('alert') }}
+    <div>
+      <p><strong>The router is not answering</strong>{% if router.error %}: {{ router.error }}{% endif %}.</p>
+      <p class="muted">Tried <code>{{ settings.router_url }}/health</code>{% if router.fetched_at %} {{ router.fetched_at|relative(now) }}{% endif %}. Route status is unknown until it answers; keys, usage and the audit log are unaffected.</p>
+    </div>
+  </div>
+  {% else %}
+  <dl class="sheet figures">
+    <div class="figure">
+      <dt>Router</dt>
+      <dd class="value">{{ (router.status or 'up')|capitalize }}</dd>
+      <dd class="sub">{% if router.version %}Version {{ router.version }}{% else %}Version not reported{% endif %}</dd>
+    </div>
+    <div class="figure">
+      <dt>{{ 'Routes up' if router.shape != 'backends' else 'Backends healthy' }}</dt>
+      {% if router.shape == 'backends' %}
+      {% set probed = router.backends.values()|reject('equalto', 'skipped')|list %}
+      <dd class="value">{{ probed|select('equalto', 'healthy')|list|length }} <small>of {{ probed|length }}</small></dd>
+      <dd class="sub">{% if router.backends_down %}{{ router.backends_down|length }} not healthy{% else %}All probed backends answer{% endif %}</dd>
+      {% else %}
+      <dd class="value">{{ router.routes_up }} <small>of {{ router.routes|length }}</small></dd>
+      <dd class="sub">{% if router.routes_down %}Down: {{ router.routes_down|join(', ') }}{% else %}Every route has a backend{% endif %}</dd>
+      {% endif %}
+    </div>
+    <div class="figure">
+      <dt>Model ids served</dt>
+      <dd class="value{% if router.models_error %} faint{% endif %}">{{ '–' if router.models_error else router.models|length }}</dd>
+      <dd class="sub">{% if router.models_error %}The model list failed: {{ router.models_error }}{% else %}Listed by the router right now{% endif %}</dd>
+    </div>
+    <div class="figure">
+      <dt>Router's database</dt>
+      <dd class="value">{% if router.database_ok is none %}<span class="faint">–</span>{% elif router.database_ok %}Connected{% else %}Unavailable{% endif %}</dd>
+      <dd class="sub">{% if router.database_ok is false %}Key changes are frozen and usage is not recorded{% else %}Checked {{ router.fetched_at|relative(now) if router.fetched_at else 'just now' }}{% endif %}</dd>
+    </div>
+  </dl>
+  {% endif %}
+
+  <section class="sheet" aria-labelledby="routes-title">
+    <div class="sheet-head">
+      <h2 id="routes-title">Routes</h2>
+      <span class="aside">Requests and errors cover the last 7 days</span>
+    </div>
+    {% if routes %}
+    <div class="scroll">
+      <table class="table cards">
+        <thead>
+          <tr>
+            <th scope="col">Route</th>
+            <th scope="col">Status</th>
+            <th scope="col">Model ids</th>
+            <th scope="col">Keys limited to it</th>
+            <th scope="col" class="num">Requests</th>
+            <th scope="col"><span class="vh">Requests per day</span></th>
+            <th scope="col" class="num">Error rate</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for route in routes %}
+          <tr class="top">
+            <td class="span">
+              <span class="state"><span class="swatch c{{ route.slot }}"></span><span class="cell-main">{{ route.name }}</span></span>
+              <span class="cell-sub">{{ route.type or 'type unknown' }}{% if not route.configured %}, no longer configured{% endif %}</span>
+            </td>
+            <td data-label="Status">{% if router.configured %}{{ ui.route_state(route.state) }}{% else %}<span class="faint">–</span>{% endif %}</td>
+            <td data-label="Model ids" class="span">
+              {% if route.listed or route.seen %}
+              <span class="tags">
+                {% for id in route.listed %}<span class="tag">{{ id }}</span>{% endfor %}
+                {% for id in route.seen %}<span class="tag dim" title="Seen in traffic in the last 30 days, not listed by the router now">{{ id }}</span>{% endfor %}
+              </span>
+              {% elif router.reachable and router.shape == 'routes' and route.state == 'down' %}
+              <span class="faint">Not listed while the route is down</span>
+              {% else %}<span class="faint">–</span>{% endif %}
+            </td>
+            <td data-label="Keys limited to it">{{ route.restricted_keys }}</td>
+            <td class="num" data-label="Requests">{{ route.cell.requests|num }}</td>
+            <td data-label="Per day">{{ ui.spark(route.spark) }}</td>
+            <td class="num" data-label="Error rate">{{ route.cell.error_rate|pct }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="sheet-foot">{{ open_keys }} of {{ total_keys }} {{ 'key' if total_keys == 1 else 'keys' }} may use every route. Dashed model ids were seen in traffic during the last 30 days but are not in the router's list right now.</p>
+    {% else %}
+    <div class="empty">
+      <h3>No routes yet</h3>
+      <p>The router writes its configured routes to the database when it starts. Start it once against this database and they appear here.</p>
+    </div>
+    {% endif %}
+  </section>
+
+  {% if unassigned %}
+  <section class="sheet" aria-labelledby="ids-title">
+    <div class="sheet-head">
+      <h2 id="ids-title">Model ids served</h2>
+      <span class="aside">{{ unassigned|length }}</span>
+    </div>
+    <div class="sheet-body stack">
+      <p class="muted">This router version does not say which route serves an id, so they are listed together.</p>
+      <div class="tags">{% for model in unassigned %}<span class="tag">{{ model.id }}</span>{% endfor %}</div>
+    </div>
+  </section>
+  {% endif %}
+
+  {% if backends %}
+  <section class="sheet" aria-labelledby="backends-title">
+    <div class="sheet-head">
+      <h2 id="backends-title">Backends</h2>
+      <span class="aside">This router version reports health per backend, not per route</span>
+    </div>
+    <div class="scroll">
+      <table class="table">
+        <thead><tr><th scope="col">Backend</th><th scope="col">Health</th></tr></thead>
+        <tbody>
+          {% for url, state in backends %}
+          <tr>
+            <td><span class="mono">{{ url }}</span></td>
+            <td>
+              {% if state == 'healthy' %}<span class="state up">{{ ui.lamp('up') }}Healthy</span>
+              {% elif state == 'skipped' %}<span class="state unknown">{{ ui.lamp('unknown') }}Not probed</span>
+              {% elif state == 'unhealthy' %}<span class="state down">{{ ui.lamp('down') }}Unhealthy</span>
+              {% else %}<span class="state down">{{ ui.lamp('down') }}Unreachable</span>{% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

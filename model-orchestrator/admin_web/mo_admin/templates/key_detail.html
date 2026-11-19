@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}{{ key.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="crumb" href="/keys">Back to keys</a>
+    <h1>{{ key.name }}</h1>
+    <div class="keyline">
+      {{ ui.key_badges(key) }}
+      <span class="prefix">{{ key.key_prefix }}…</span>
+      <span class="muted">{{ key.owner }}</span>
+    </div>
+  </div>
+  <div class="head-actions">
+    <form method="post" action="/keys/{{ key.id }}/enabled">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="enabled" value="{{ '0' if key.enabled else '1' }}">
+      <input type="hidden" name="return_to" value="{{ current_url }}">
+      <button type="submit" class="btn">{{ 'Disable' if key.enabled else 'Enable' }}</button>
+    </form>
+    <a class="btn" href="/keys/{{ key.id }}/edit">Edit</a>
+    <a class="btn btn-danger-quiet" href="/keys/{{ key.id }}/delete">Delete</a>
+  </div>
+</div>
+
+<div class="stack">
+  {% if key.status.code == 'expired' %}
+  {{ ui.flash('bad', 'This key expired ' ~ (key.expires_at|relative(now)) ~ '. The router rejects it until the expiry date is moved or removed.') }}
+  {% elif key.status.code == 'expiring' %}
+  {{ ui.flash('warn', 'This key expires ' ~ (key.expires_at|relative(now)) ~ ', at the end of ' ~ (key.expires_at|day) ~ ' UTC.') }}
+  {% elif key.status.code == 'disabled' %}
+  {{ ui.flash('info', 'This key is disabled. The router rejects it until it is enabled again.') }}
+  {% endif %}
+
+  <div class="cols cols-2-1">
+    <div class="stack" id="key-usage">
+      <section class="sheet dims" id="key-charts" aria-labelledby="usage-title" hx-target="#key-charts" hx-select="#key-charts" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#key-charts">
+        <div class="sheet-head">
+          <h2 id="usage-title">Requests per day</h2>
+          <div class="seg" role="group" aria-label="Period">
+            {% for code, label in ranges %}
+            {% set href = '/keys/' ~ key.id ~ qs({'range': code if code != '30d' else None}) %}
+            <a id="range-{{ code }}" href="{{ href }}" hx-get="{{ href }}"{% if code == range %} aria-current="true"{% endif %}>{{ label }}</a>
+            {% endfor %}
+          </div>
+        </div>
+        <dl class="figures">
+          <div class="figure">
+            <dt>Requests</dt>
+            <dd class="value">{{ totals.requests|headline }}</dd>
+          </div>
+          <div class="figure">
+            <dt>Errors</dt>
+            <dd class="value">{{ totals.error_rate|pct }}{% if totals.requests %} <small>{{ totals.errors|num }}</small>{% endif %}</dd>
+          </div>
+          <div class="figure">
+            <dt>Tokens</dt>
+            <dd class="value{% if not tokens_known %} faint{% endif %}">{{ totals.tokens|compact if tokens_known else '–' }}</dd>
+          </div>
+          <div class="figure">
+            <dt>Average duration</dt>
+            <dd class="value{% if totals.avg_ms is none %} faint{% endif %}">{{ totals.avg_ms|duration }}</dd>
+          </div>
+        </dl>
+        <div class="sheet-body">
+          {{ ui.stacked(requests_chart, 'Requests per day by route', 'This key sent no requests in the last ' ~ window.days ~ ' days.') }}
+        </div>
+
+        {% if not tokens_chart.empty %}
+        <div class="sheet-head">
+          <h2>Tokens per day</h2>
+          {% if tokens_since %}<span class="aside">Counted since {{ tokens_since|day(false) }}</span>{% endif %}
+        </div>
+        <div class="sheet-body">
+          {{ ui.stacked(tokens_chart, 'Prompt and completion tokens per day') }}
+        </div>
+        {% endif %}
+
+        <div class="cols cols-1-1 sheet-body inset">
+          <div>
+            <h3>By route</h3>
+            {% if routes %}
+            <div class="scroll"><table class="table">
+              <thead><tr><th scope="col">Route</th><th scope="col" class="num">Requests</th><th scope="col" class="num">Errors</th><th scope="col" class="num">Tokens</th></tr></thead>
+              <tbody>
+                {% for row in routes %}
+                <tr>
+                  <td><span class="state"><span class="swatch c{{ row.slot }}"></span>{{ row.name }}</span></td>
+                  <td class="num">{{ row.cell.requests|num }}</td>
+                  <td class="num">{{ row.cell.error_rate|pct }}</td>
+                  <td class="num">{{ row.cell.tokens|compact if tokens_known else '–' }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table></div>
+            {% else %}<p class="muted">No requests in this period.</p>{% endif %}
+          </div>
+          <div>
+            <h3>By model id</h3>
+            {% if models %}
+            <div class="scroll"><table class="table">
+              <thead><tr><th scope="col">Model id</th><th scope="col" class="num">Requests</th><th scope="col" class="num">Tokens</th><th scope="col" class="num">Avg duration</th></tr></thead>
+              <tbody>
+                {% for row in models %}
+                <tr>
+                  <td><span class="mono">{{ row.name }}</span></td>
+                  <td class="num">{{ row.cell.requests|num }}</td>
+                  <td class="num">{{ row.cell.tokens|compact }}</td>
+                  <td class="num">{{ row.cell.avg_ms|duration }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table></div>
+            {% else %}<p class="muted">{% if tokens_known %}No hourly usage for this key in this period.{% else %}The model id a client sends is part of hourly usage, and none has been recorded yet.{% endif %}</p>{% endif %}
+          </div>
+        </div>
+
+        <div class="sheet-head"><h2>Outcomes</h2>{% if outcome_total %}<span class="aside">{{ outcome_total|num }} requests, including ones the router refused</span>{% endif %}</div>
+        <div class="sheet-body inset">
+          {% if outcomes %}
+          <svg class="splitbar" role="img" aria-label="Share of requests by outcome class">
+            {% for seg in outcome_segments %}<rect class="c{{ seg.cls }}" x="{{ seg.x }}%" width="{{ seg.w }}%" height="100%"><title>{{ seg.label }}: {{ seg.count|num }}</title></rect>{% endfor %}
+          </svg>
+          <ul class="legend">
+            {% for seg in outcome_segments %}<li><span class="swatch c{{ seg.cls }}"></span>{{ seg.label }} <span class="n">{{ seg.count|compact }}</span></li>{% endfor %}
+          </ul>
+          <div class="scroll"><table class="table">
+            <thead><tr><th scope="col">Outcome</th><th scope="col" class="num">Requests</th><th scope="col" class="num">Share</th><th scope="col" class="num">Avg duration</th></tr></thead>
+            <tbody>
+              {% for row in outcomes %}
+              <tr>
+                <td><span class="state"><span class="swatch c{{ outcome_class(row.code) }}"></span>{{ outcome_label(row.code) }}</span> <span class="cell-sub mono">{{ row.code }}</span></td>
+                <td class="num">{{ row.cell.requests|num }}</td>
+                <td class="num">{{ (row.share / 100)|pct }}</td>
+                <td class="num">{{ row.cell.avg_ms|duration }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table></div>
+          {% else %}
+          <p class="muted">{% if tokens_known %}No hourly usage for this key in this period.{% else %}Outcomes are part of hourly usage, and none has been recorded yet. Requests and errors above come from the daily totals.{% endif %}</p>
+          {% endif %}
+        </div>
+      </section>
+    </div>
+
+    <div class="stack">
+      <section class="sheet" aria-labelledby="facts-title">
+        <div class="sheet-head"><h2 id="facts-title">Settings</h2><a class="aside" href="/keys/{{ key.id }}/edit">Edit</a></div>
+        <div class="sheet-body">
+          <dl class="facts">
+            <dt>Owner</dt><dd>{{ key.owner }}{% if key.owner_email %}<span class="cell-sub">{{ key.owner_email }}</span>{% endif %}</dd>
+            <dt>Rate limit</dt><dd>{{ key.rate_limit_rpm|num }} requests per minute</dd>
+            <dt>Concurrency</dt><dd>{% if key.max_concurrency is none %}No cap{% else %}{{ key.max_concurrency|num }} requests at once{% endif %}</dd>
+            <dt>Routes</dt>
+            <dd>
+              {% if key.allowed_models %}
+              <span class="tags">{% for name in key.allowed_models|sort %}<span class="tag{% if name in stale_routes %} dim{% endif %}">{{ name }}</span>{% endfor %}</span>
+              {% if stale_routes %}<span class="cell-sub">Dashed routes are no longer configured on the router.</span>{% endif %}
+              {% else %}All routes{% endif %}
+            </dd>
+            <dt>Expires</dt><dd>{% if key.expires_at %}{{ key.expires_at|day }} <span class="muted">({{ key.expires_at|relative(now) }})</span>{% else %}Never{% endif %}</dd>
+            <dt>Last used</dt><dd>{% if key.last_used_at %}{{ key.last_used_at|relative(now) }} <span class="cell-sub">{{ key.last_used_at|clock }}</span>{% else %}Never{% endif %}</dd>
+            <dt>Created</dt><dd>{{ key.created_at|clock }}{% if key.created_by %} <span class="cell-sub">by {{ key.created_by.partition(':')[2] or key.created_by }}</span>{% endif %}</dd>
+            {% if key.notes %}<dt>Notes</dt><dd>{{ key.notes }}</dd>{% endif %}
+          </dl>
+        </div>
+      </section>
+
+      <section class="sheet" aria-labelledby="history-title">
+        <div class="sheet-head"><h2 id="history-title">Changes</h2><a class="aside" href="/audit">Audit log</a></div>
+        {% if history %}
+        <ul class="timeline">
+          {% for entry in history %}
+          <li>
+            <strong>{{ entry.title }}</strong>
+            <span class="when">by {{ entry.actor_name }}, <time datetime="{{ entry.at|iso }}" title="{{ entry.at|clock }} UTC">{{ entry.at|relative(now) }}</time></span>
+            {% if entry.lines %}<ul>{% for line in entry.lines %}<li>{{ line }}</li>{% endfor %}</ul>{% endif %}
+          </li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <div class="sheet-body"><p class="muted">No changes recorded. Keys created before the audit log existed start with an empty history.</p></div>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}

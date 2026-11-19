@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block body %}
+<main id="main" class="auth" tabindex="-1">
+  <div class="auth-card{% block card_class %}{% endblock %}">
+    <div id="flash" class="flashes" aria-live="polite">
+      {% for kind, text in flashes %}{{ ui.flash(kind, text) }}{% endfor %}
+    </div>
+    {% block card %}{% endblock %}
+  </div>
+</main>
+{% endblock %}

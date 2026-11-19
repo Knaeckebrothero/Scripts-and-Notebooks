@@ -1,0 +1,34 @@
+[project]
+name = "mo-admin"
+version = "0.1.0"
+description = "Admin console for the model orchestrator: API keys, usage, route status and an audit log."
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.32",
+    "jinja2>=3.1.4",
+    "python-multipart>=0.0.12",
+    "psycopg[binary,pool]>=3.2",
+    "httpx>=0.27",
+    "pyjwt[crypto]>=2.9",
+    "itsdangerous>=2.2",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.16.2",
+    "pytest>=8.3",
+]
+
+[tool.uv]
+# An application, not a library: nothing to build or install, run it from this directory.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra -q"
+filterwarnings = [
+    "error::RuntimeWarning",
+]

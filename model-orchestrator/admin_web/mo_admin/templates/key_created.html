@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Key created{% endblock %}
+{% block page_class %} page-narrow{% endblock %}
+{% block content %}
+<section class="reveal" aria-labelledby="created-title" hx-history="false">
+  <div class="reveal-body">
+    <h1 id="created-title">Copy the secret now</h1>
+    <p class="lede">This is the only time the secret for <strong>{{ key.name }}</strong> is shown. The console stores a hash of it and cannot show it again.</p>
+
+    <div class="secret">
+      <output id="secret" aria-label="Secret key">{{ token }}</output>
+      <button type="button" class="btn btn-primary js-only" data-copy="#secret">
+        <span class="when-idle">{{ ui.icon('copy') }}Copy secret</span>
+        <span class="when-copied">{{ ui.icon('check') }}Copied</span>
+      </button>
+    </div>
+    <p id="copy-status" class="note" role="status" aria-live="polite"></p>
+
+    <div class="stack">
+      <div>
+        <h3>Use it as a bearer token</h3>
+        <pre class="snippet">Authorization: Bearer {{ token }}</pre>
+      </div>
+      <p class="muted">The router accepts the key within {{ refresh_seconds }} seconds. If the secret gets lost, delete this key and create a new one.</p>
+      <dl class="facts">
+        <dt>Owner</dt><dd>{{ key.owner }}</dd>
+        <dt>Rate limit</dt><dd>{{ key.rate_limit_rpm|num }} requests per minute{% if key.max_concurrency is not none %}, {{ key.max_concurrency|num }} at once{% endif %}</dd>
+        <dt>Routes</dt><dd>{% if key.allowed_models %}{{ key.allowed_models|sort|join(', ') }}{% else %}All routes{% endif %}</dd>
+        <dt>Expires</dt><dd>{% if key.expires_at %}{{ key.expires_at|day }}{% else %}Never{% endif %}</dd>
+      </dl>
+    </div>
+
+    <div class="form-actions">
+      <a class="btn" href="/keys/{{ key.id }}">I have copied it, open the key</a>
+      <a class="btn" href="/keys/new">Create another</a>
+      <a class="btn" href="/keys">All keys</a>
+    </div>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,20 @@
+{% extends "auth_base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Schema not initialised{% endblock %}
+{% block card_class %} wide{% endblock %}
+{% block card %}
+<div class="sheet">
+  <div class="sheet-body stack">
+    <h1>The database schema is not initialised</h1>
+    <p>The console reached Postgres, but the tables it reads are missing or older than expected. The router creates and migrates them: start the router once against this database, then reload this page.</p>
+    {% if missing %}
+    <div>
+      <h3>Missing</h3>
+      <div class="tags">{% for name in missing %}<span class="tag">{{ name }}</span>{% endfor %}</div>
+    </div>
+    {% endif %}
+    <p class="muted">The console never creates or changes tables itself. The migration files live in <code>model-orchestrator/migrations/</code>.</p>
+    <p class="head-actions"><a class="btn btn-primary" href="{{ current_url }}">Check again</a></p>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,74 @@
+{% import "macros.html" as ui %}
+<!doctype html>
+<html lang="en"{% if theme %} data-theme="{{ theme }}"{% endif %}>
+<head>
+  <meta charset="utf-8">
+  <title>{% block title %}{% endblock %} – {{ site_name }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"refreshOnHistoryMiss":true,"selfRequestsOnly":true}'>
+  <link rel="preload" href="/static/fonts/heros-regular.woff2?v=1" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/heros-cn-bold.woff2?v=1" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/css/app.css?v={{ asset_version }}">
+  <link rel="icon" href="/static/img/favicon.svg?v={{ asset_version }}" type="image/svg+xml">
+  <script src="/static/vendor/htmx.min.js?v={{ asset_version }}" defer></script>
+  <script src="/static/js/app.js?v={{ asset_version }}" defer></script>
+</head>
+<body hx-headers='{"X-CSRF-Token": "{{ csrf_token }}"}'>
+  <a class="skip" href="#main">Skip to content</a>
+  {% include "partials/icons.html" %}
+  <header class="masthead">
+    <div class="masthead-in">
+      <a class="brand" href="/" aria-label="{{ site_name }}, overview">
+        <svg class="mark" viewBox="0 0 26 26" aria-hidden="true" focusable="false">
+          <rect class="mark-tile" width="26" height="26" rx="6"/>
+          <g fill="none" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+            <path class="mark-line" d="M5.5 17.5h15"/>
+            <path class="mark-line" d="M9.5 17.5c5.5 0 4.5-9 10-9h1"/>
+          </g>
+        </svg>
+        <span>{{ site_name }}</span>
+      </a>
+      {% if user %}
+      <nav class="nav" aria-label="Sections">
+        {% set icons = {'overview': 'board', 'keys': 'key', 'usage': 'chart', 'models': 'route', 'audit': 'audit'} %}
+        {% for code, href, label in nav %}
+        <a href="{{ href }}"{% if active == code %} aria-current="page"{% endif %}>{{ ui.icon(icons[code]) }}{{ label }}</a>
+        {% endfor %}
+      </nav>
+      {% endif %}
+      <div class="masthead-end">
+        {% if user %}
+        {% include "partials/router_lamp.html" %}
+        {% endif %}
+        <button type="button" class="icon-btn theme-toggle js-only" data-theme-toggle aria-label="Switch between light and dark theme" title="Light or dark theme">
+          <span class="to-dark">{{ ui.icon('moon') }}</span><span class="to-light">{{ ui.icon('sun') }}</span>
+        </button>
+        {% if user %}
+        <details class="menu">
+          <summary aria-label="Account: {{ session.display_name }}">{{ ui.icon('user') }}<span>{{ session.display_name }}</span></summary>
+          <div class="menu-pop">
+            <p class="who">{{ session.display_name }}</p>
+            <p class="how">{% if session.method == 'oidc' %}Signed in with {{ settings.oidc_label }}{% else %}Signed in with the local account{% endif %}{% if session.display_name != user %} as {{ user }}{% endif %}</p>
+            <form method="post" action="/logout">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn">Sign out</button>
+            </form>
+          </div>
+        </details>
+        {% endif %}
+      </div>
+    </div>
+  </header>
+  {% block body %}
+  <main id="main" class="page{% block page_class %}{% endblock %}" tabindex="-1">
+    <div id="flash" class="flashes" aria-live="polite">
+      {% for kind, text in flashes %}{{ ui.flash(kind, text) }}{% endfor %}
+    </div>
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="foot">All dates and times are UTC.</footer>
+  {% endblock %}
+</body>
+</html>
