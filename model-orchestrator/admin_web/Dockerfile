@@ -5,7 +5,7 @@
 #
 # The image holds no secrets and no configuration: everything comes from
 # ADMIN_* environment variables (see .env.example).
-FROM python:3.13-slim
+FROM python:3.15-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
