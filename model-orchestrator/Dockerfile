@@ -7,7 +7,7 @@
 # /app/config.yaml, everything else from ROUTER_* environment variables
 # (see README.md). Dependencies are installed from uv.lock, so two builds of
 # the same commit contain the same packages.
-FROM python:3.13-slim
+FROM python:3.15-slim
 
 ARG ROUTER_VERSION=0.0.0.dev0
 ARG ROUTER_GIT_SHA=unknown
