@@ -1,0 +1,37 @@
+# Dependency updates for the model router and its admin website.
+#
+# Both install from a lockfile, so nothing changes in an image unless a pull
+# request changes the lock. Dependabot opens one grouped pull request per week
+# and per directory; the model-orchestrator workflow runs the full test suite
+# on it. The old Streamlit UI (model-orchestrator/admin_ui) is left out on
+# purpose: it is being retired.
+version: 2
+updates:
+  - package-ecosystem: "uv"
+    directory: "/model-orchestrator"
+    schedule:
+      interval: "weekly"
+    groups:
+      router-python:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(router)"
+
+  - package-ecosystem: "uv"
+    directory: "/model-orchestrator/admin_web"
+    schedule:
+      interval: "weekly"
+    groups:
+      admin-web-python:
+        patterns: ["*"]
+    commit-message:
+      prefix: "deps(admin-web)"
+
+  - package-ecosystem: "docker"
+    directories:
+      - "/model-orchestrator"
+      - "/model-orchestrator/admin_web"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "deps(images)"
