@@ -1,7 +1,18 @@
-# Template — copy to ingress.yaml, replace host/tls-secret values, apply.
-# This pattern mirrors the homelab model-orchestrator ingress (Traefik +
-# cert-manager). For nginx-ingress or another controller, swap the
-# ingressClassName and annotations accordingly.
+# Template. Copy to ingress.yaml, replace the hosts and TLS secrets, apply.
+# Written for Traefik with certificates from cert-manager. For another
+# controller change ingressClassName and the annotations.
+#
+# Whatever sits in front of the router has to allow what the router allows.
+# Check these three on your controller:
+#   - request bodies up to ROUTER_MAX_BODY_MB (default 200 MB),
+#   - responses that take up to CHAT_READ_TIMEOUT_S (default 600 s),
+#   - unbuffered responses, or streaming arrives in one piece at the end.
+# With ingress-nginx, for example, that is
+#   nginx.ingress.kubernetes.io/proxy-body-size: "200m"
+#   nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+#   nginx.ingress.kubernetes.io/proxy-buffering: "off"
+#
+# Only port 8090 of the router is exposed. Its internal port 9095 is not.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -18,7 +29,11 @@ spec:
     - hosts:
         - ai.example.com
       secretName: ai-example-com-tls
+    - hosts:
+        - ai-admin.example.com
+      secretName: ai-admin-example-com-tls
   rules:
+    # The API.
     - host: ai.example.com
       http:
         paths:
@@ -29,3 +44,14 @@ spec:
                 name: model-orchestrator
                 port:
                   number: 8090
+    # The admin website (admin-web.yaml). Set its ADMIN_PUBLIC_URL to this host.
+    - host: ai-admin.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: model-orchestrator-admin-web
+                port:
+                  number: 8600

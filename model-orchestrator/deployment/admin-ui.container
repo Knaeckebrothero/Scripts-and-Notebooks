@@ -1,8 +1,9 @@
-# admin-ui.container — Streamlit UI for API key management + usage monitoring
+# admin-ui.container: the old Streamlit admin UI (admin_ui/)
 #
-# Binds to 127.0.0.1:8502; the nginx unit terminates TLS on the public :8501
-# and proxies here (websocket upgrade included — Streamlit needs it).
-# Credentials + DSN live in ~/.config/model-orchestrator/admin-ui.env
+# Still deployable until the admin website (admin-web.container) has replaced
+# it. Listens on 127.0.0.1:8502; to serve it, set UI_UPSTREAM in
+# nginx.container to http://127.0.0.1:8502 (websocket upgrade included).
+# Credentials and the database URL: ~/.config/model-orchestrator/admin-ui.env
 # (chmod 600), see admin-ui.env.example next to this file.
 [Unit]
 Description=Model Orchestrator admin UI (Streamlit)
@@ -11,10 +12,9 @@ Wants=network-online.target
 
 [Container]
 ContainerName=orchestrator-admin-ui
+# `latest` moves only on a release tag (model-orchestrator-admin-ui-vX.Y.Z);
+# every build of main is published as `sha-<short>`.
 Image=ghcr.io/knaeckebrothero/model-orchestrator-admin-ui:latest
-# Auto-update is enabled on this host (podman-auto-update.timer, daily).
-# This unit is on a moving `:latest` tag, so it WILL pick up whatever CI last
-# pushed to main. Restart is ~6s; podman rolls back on healthcheck failure.
 AutoUpdate=registry
 Network=host
 

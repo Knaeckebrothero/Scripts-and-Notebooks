@@ -8,6 +8,9 @@ metadata:
 spec:
   selector:
     app.kubernetes.io/name: model-orchestrator
+  # The API only. The internal port (9095: metrics, detailed health) is left
+  # out on purpose; Prometheus scrapes the pod directly (see the annotations
+  # in deployment.yaml).
   ports:
     - name: http
       port: 8090

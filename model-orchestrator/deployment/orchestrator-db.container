@@ -1,9 +1,10 @@
-# orchestrator-db.container — Postgres backing the model-orchestrator
+# orchestrator-db.container: Postgres for the router
 #
-# Holds the API keys (hashed) and the daily usage aggregates; the router
-# creates and migrates its own tables on startup, the admin UI reads/writes
-# the same database. Loopback-only: with Network=host the listen_addresses
-# override below keeps it off the external interfaces.
+# Holds the API keys (hashed), the usage tables and the admin audit log. The
+# router creates and migrates the tables at start; the admin website and the
+# old admin UI use the same database. Loopback only: with Network=host the
+# listen_addresses setting below keeps it off the external interfaces.
+# Postgres 16 and 17 are supported. This unit does not back anything up.
 #
 # Credentials live in ~/.config/model-orchestrator/db.env (chmod 600), see
 # db.env.example next to this file.

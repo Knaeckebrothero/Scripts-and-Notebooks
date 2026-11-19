@@ -1,0 +1,47 @@
+# admin-web.container: the admin website (keys, usage, route status, audit log)
+#
+# Listens on 127.0.0.1:8600, plain HTTP. nginx.container terminates TLS on the
+# public UI port and proxies here: set UI_UPSTREAM=http://127.0.0.1:8600 there.
+# It uses the router's database and never changes the schema: a router of the
+# same release has to have started against that database once, because the
+# router applies the migrations, including the tables only the website uses.
+#
+# Settings and secrets: ~/.config/model-orchestrator/admin-web.env (chmod 600),
+# see admin-web.env.example next to this file and ../admin_web/README.md.
+[Unit]
+Description=Model Orchestrator admin website
+After=network-online.target orchestrator-db.service model-orchestrator.service
+Wants=network-online.target
+
+[Container]
+ContainerName=orchestrator-admin-web
+# `latest` and `vX.Y.Z` are published only on a release tag
+# (model-orchestrator-admin-web-vX.Y.Z), `sha-<short>` on every build of main.
+# Pin a tag to hold a version; with `latest`, AutoUpdate follows releases.
+Image=ghcr.io/knaeckebrothero/model-orchestrator-admin-web:latest
+AutoUpdate=registry
+Network=host
+
+EnvironmentFile=%h/.config/model-orchestrator/admin-web.env
+# Loopback only, and that matters: the website believes X-Forwarded-* headers
+# by default, so with host networking nobody but the TLS proxy on this host
+# may reach the port. Set ADMIN_PUBLIC_URL (in admin-web.env) to the https
+# address people use.
+Environment=ADMIN_HOST=127.0.0.1
+Environment=ADMIN_PORT=8600
+
+# /livez touches neither the database nor the router.
+HealthCmd=python -c "import sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8600/livez', timeout=3); sys.exit(0 if r.status==200 else 1)"
+HealthInterval=30s
+HealthTimeout=5s
+HealthStartPeriod=15s
+HealthRetries=3
+
+[Service]
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=120
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

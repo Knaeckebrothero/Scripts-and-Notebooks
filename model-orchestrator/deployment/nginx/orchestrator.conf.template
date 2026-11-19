@@ -1,17 +1,17 @@
-# TLS termination for the model-orchestrator API and the admin UI.
+# TLS termination for the router's API and one admin UI.
 #
-# This is an nginx *template*: the official nginx image's entrypoint runs
-# envsubst over /etc/nginx/templates/*.template at startup, substituting only
-# variables that are actually defined in the environment — nginx runtime
-# variables ($http_upgrade, $host, ...) pass through untouched.
+# This is an nginx *template*: the entrypoint of the official nginx image runs
+# envsubst over /etc/nginx/templates/*.template at start and replaces only
+# variables that are set in the environment. nginx's own variables
+# ($http_upgrade, $host, ...) pass through untouched.
 #
-#   ROUTER_UPSTREAM   e.g. http://127.0.0.1:8091  (quadlet, host network)
-#                     or   http://router:8090     (compose, bridge network)
-#   UI_UPSTREAM       e.g. http://127.0.0.1:8502  or  http://admin-ui:8501
+#   ROUTER_UPSTREAM   for example http://127.0.0.1:8091
+#   UI_UPSTREAM       http://127.0.0.1:8600  the admin website (admin_web/)
+#                     http://127.0.0.1:8502  the Streamlit UI (admin_ui/)
 #
 # Certificates are mounted at /etc/nginx/certs/server.{crt,key}. The router
-# and the UI themselves speak plain HTTP on loopback/pod-internal addresses
-# only — nothing listens unencrypted on an external interface.
+# and the UI speak plain HTTP on loopback only. The router's internal port
+# (metrics, detailed health) is deliberately not proxied.
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -26,7 +26,8 @@ server {
     ssl_certificate     /etc/nginx/certs/server.crt;
     ssl_certificate_key /etc/nginx/certs/server.key;
 
-    # Audio uploads for /v1/audio/transcriptions
+    # Audio uploads and large embedding batches. Keep it in step with the
+    # router's own limit, ROUTER_MAX_BODY_MB (default 200).
     client_max_body_size 200m;
 
     location / {
@@ -37,8 +38,9 @@ server {
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
 
-        # SSE streaming: chunks must reach the client immediately, and slow
-        # generations must not be killed mid-stream.
+        # Streaming: events must reach the client as they come, and a slow
+        # generation must not be cut off. Keep the timeouts at or above the
+        # router's chat read timeout, CHAT_READ_TIMEOUT_S (default 600).
         proxy_buffering off;
         proxy_read_timeout 600s;
         proxy_send_timeout 600s;
@@ -55,10 +57,13 @@ server {
     location / {
         proxy_pass ${UI_UPSTREAM};
         proxy_http_version 1.1;
-        # Streamlit runs over a websocket (/_stcore/stream)
+        # The Streamlit UI runs over a websocket (/_stcore/stream). The admin
+        # website does not need the upgrade headers and is not hurt by them.
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection $connection_upgrade;
         proxy_set_header Host $host;
+        # The admin website takes the client address from the last entry of
+        # X-Forwarded-For and the scheme from X-Forwarded-Proto.
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
         proxy_read_timeout 86400s;

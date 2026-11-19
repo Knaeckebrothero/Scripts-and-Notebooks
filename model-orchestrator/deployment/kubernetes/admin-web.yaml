@@ -1,0 +1,125 @@
+# The admin website: API keys, usage, route status, audit log.
+#
+# A Deployment of its own, not a second container in the router's pod, so that
+# updating the website never restarts the router. It uses the router's
+# database and never changes the schema: a router of the same release has to
+# have started against that database once, because the router applies the
+# migrations, including the tables only the website uses.
+# Settings: ../../admin_web/README.md
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: model-orchestrator-admin-web
+  namespace: model-orchestrator
+  labels:
+    app.kubernetes.io/name: model-orchestrator-admin-web
+spec:
+  # One replica: the login throttle lives in the website's memory.
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: model-orchestrator-admin-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: model-orchestrator-admin-web
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: admin-web
+          # Pin what you deploy: a release (vX.Y.Z, from the tag
+          # model-orchestrator-admin-web-vX.Y.Z) or a build of main (sha-<short>).
+          image: ghcr.io/knaeckebrothero/model-orchestrator-admin-web:v0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: ADMIN_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: model-orchestrator-keys
+                  key: database-url
+            # Live route status. Only GET /health and GET /v1/models are called.
+            - name: ADMIN_ROUTER_URL
+              value: "http://model-orchestrator:8090"
+            - name: ADMIN_SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: model-orchestrator-keys
+                  key: admin-session-secret
+            # The https address people type. Cookies are then always Secure and
+            # the single sign-on redirect does not depend on request headers.
+            # The website believes X-Forwarded-* headers by default: only the
+            # ingress may reach this pod's port.
+            - name: ADMIN_PUBLIC_URL
+              value: "https://ai-admin.example.com"
+            # The local account. For single sign-on set the ADMIN_OIDC_*
+            # variables instead (or as well).
+            - name: ADMIN_LOCAL_USER
+              value: "admin"
+            - name: ADMIN_LOCAL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: model-orchestrator-keys
+                  key: admin-local-password
+            # - name: ADMIN_OIDC_ISSUER
+            #   value: "https://keycloak.example.org/realms/example"
+            # - name: ADMIN_OIDC_CLIENT_ID
+            #   value: "model-orchestrator-admin"
+            # - name: ADMIN_OIDC_REQUIRED_ROLE
+            #   value: "router-admin"
+            # - name: ADMIN_OIDC_CLIENT_SECRET
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: model-orchestrator-keys
+            #       key: admin-oidc-client-secret
+          ports:
+            - name: http
+              containerPort: 8600
+              protocol: TCP
+          # /livez touches neither the database nor the router.
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: model-orchestrator-admin-web
+  namespace: model-orchestrator
+  labels:
+    app.kubernetes.io/name: model-orchestrator-admin-web
+spec:
+  selector:
+    app.kubernetes.io/name: model-orchestrator-admin-web
+  ports:
+    - name: http
+      port: 8600
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP

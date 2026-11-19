@@ -6,37 +6,36 @@ metadata:
   labels:
     app.kubernetes.io/name: model-orchestrator
 data:
-  # Non-secret router configuration: server + routes only. API keys (with
-  # their per-key rate limits / allowlists / expiry) live in Postgres — the
-  # connection string comes from the Secret (see secret.yaml.example).
+  # The route config. No keys and no secrets in it: API keys live in Postgres,
+  # backend keys come from the Secret through an environment variable.
+  # Schema and every option: ../../config.example.yaml
   #
-  # Replace the sample route below with your real config. Full schema
-  # reference: ../../config.example.yaml
+  # Check a change before you apply it:
+  #   python -m model_orchestrator check-config config.yaml
+  #
+  # The Deployment mounts this ConfigMap as a directory. After `kubectl apply`
+  # the kubelet updates the file (this can take a minute) and the router
+  # reloads it without a restart. An invalid config is rejected: the running
+  # one stays, the router logs why, and router_config_reloads_total{result="error"}
+  # goes up.
   config.yaml: |
-    server:
-      host: "0.0.0.0"
-      port: 8090
-
     routes:
-      # Example: a chat backend running as a Service in the same namespace.
-      # Replace with your actual backends (LLM, embedding, rerank, STT, TTS, ...).
-      - name: "example-chat"
+      # A chat backend running as a Service in the cluster.
+      - name: "Chat-12B"
         type: "chat"
-        backend: "http://llama-server:80"
+        backend: "http://vllm-chat.models.svc.cluster.local:8000"
         endpoint: "/v1/chat/completions"
-        backend_model_name: "openai/gpt-oss-20b"
+        backend_model_name: "example-org/chat-12b"
         models:
-          - "gpt-oss-20b"
-        owned_by: "openai"
+          - "chat-12b"
+        owned_by: "example-org"
 
-      # Example: a backend reachable only through the VPN sidecar (same pod,
-      # shared localhost). Requires the vpn sidecar container in deployment.yaml.
-      # - name: "internal-llm"
-      #   type: "chat"
-      #   backend: "http://llm-internal.corp.example:8000"
-      #   endpoint: "/v1/chat/completions"
-      #   backend_model_name: "internal-llm"
-      #   proxy: "socks5h://127.0.0.1:1080"
-      #   models:
-      #     - "internal-llm"
-      #   owned_by: "internal"
+      # An embedding backend.
+      - name: "Embed-Large"
+        type: "embedding"
+        backend: "http://tei-embed.models.svc.cluster.local:8080"
+        endpoint: "/v1/embeddings"
+        backend_model_name: "example-org/embed-large"
+        models:
+          - "embed-large"
+        owned_by: "example-org"
