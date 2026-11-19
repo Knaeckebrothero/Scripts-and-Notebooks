@@ -1,2 +1,16 @@
+# A real route config and real environment files never belong in git. This
+# matches at any depth, so copies under deployment/ are covered too.
 config.yaml
 .env
+*.env
+# The demo stack's config has only made-up backends and is part of the repo.
+!demo/config.yaml
+
+# Virtualenvs and tool caches (also in admin_web/ and admin_ui/)
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

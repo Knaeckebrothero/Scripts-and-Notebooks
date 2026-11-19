@@ -1,253 +1,180 @@
-# AI Model Router Configuration
-# OpenAI API-compatible gateway for deployed models
+# Model Orchestrator: example route config.
 #
-# Each route's exposed model ids are the union of:
-#   1. its `models:` list (explicit aliases — the request payload's `model`
-#      is rewritten to `backend_model_name` before forwarding), and
-#   2. ids the backend reports via its own `/v1/models` (passthrough — the
-#      payload's `model` is forwarded unchanged).
-# Aliases win on collisions. Discovery refreshes every
-# ROUTER_DISCOVERY_INTERVAL seconds (default 300). Backends without
-# `/v1/models` (e.g. Kokoro, Whisper) only contribute their declared aliases.
-# `/v1/models` responses pass upstream metadata (max_model_len, permission,
-# created, root, parent, …) through verbatim when available.
+# Copy it, replace the routes with your own, and check the result before you
+# deploy it:
+#
+#   python -m model_orchestrator check-config config.yaml
+#
+# The image ships this file as /app/config.yaml so that it starts on its own.
+# Mount your config over it, or point ROUTER_CONFIG at another path. Every
+# backend below is made up and sits on 127.0.0.1.
+#
+# Not in this file:
+#   - API keys. They live in Postgres (ROUTER_DATABASE_URL) and are managed in
+#     the admin website. An empty key table rejects every request.
+#   - Secrets. A route names an environment variable (backend_api_key_env);
+#     the value comes from the router's environment.
+#   - Ports, timeouts, probe intervals, connection and concurrency limits,
+#     log format: environment variables, listed in README.md.
+#
+# Which model ids a route answers to:
+#   1. The aliases in its `models:` list. The request's `model` is rewritten
+#      to `backend_model_name` before it is forwarded.
+#   2. Every id the backend lists in its own /v1/models. Those are forwarded
+#      as the client sent them.
+# An alias wins over a discovered id. Two routes must not share an alias or a
+# name, and unknown keys are errors, so a typo cannot be silently ignored.
+#
+# The router re-reads this file when it changes and on SIGHUP. An invalid file
+# is rejected and the running config stays in place.
 
-# API keys do NOT live in this file. They are stored in Postgres
-# (ROUTER_DATABASE_URL, required) and managed through the Streamlit admin UI
-# (admin_ui/) — each key carries its own rate limit (requests per minute),
-# an optional allowlist of route names, an optional expiry, and an enabled
-# flag. An empty key table means every request is rejected, never anonymous
-# access.
-
-# Server configuration. ROUTER_HOST / ROUTER_PORT env vars override these —
-# used to pin the router to 127.0.0.1 behind the nginx TLS terminator.
+# Only `host` is read, and only at start. ROUTER_HOST overrides it. The port is
+# ROUTER_PORT (default 8090); a `port:` key here is accepted and ignored.
 server:
   host: "0.0.0.0"
-  port: 8090
 
-# Model routing configuration
 routes:
-  # Embedding models
-  - name: "Qwen3-Embedding-8B"
-    type: "embedding"
-    backend: "http://127.0.0.1:8081"
-    endpoint: "/v1/embeddings"
-    backend_model_name: "Qwen/Qwen3-Embedding-8B"
-    models:
-      - "qwen3-embedding-8b"
-    owned_by: "qwen"
-
-  - name: "Qwen3-Reranker-8B"
-    type: "reranker"
-    backend: "http://127.0.0.1:8082"
-    endpoint: "/v1/rerank"
-    backend_model_name: "Qwen/Qwen3-Reranker-8B"
-    models:
-      - "qwen3-reranker-8b"
-    owned_by: "qwen"
-
-  - name: "Qwen3-Embedding-0.6B"
-    type: "embedding"
-    backend: "http://127.0.0.1:8083"
-    endpoint: "/v1/embeddings"
-    backend_model_name: "Qwen/Qwen3-Embedding-0.6B"
-    models:
-      - "qwen3-embedding-0.6b"
-    owned_by: "qwen"
-
-  # Vision model
-  - name: "Pixtral-12B-2409"
-    type: "vision"
-    backend: "http://127.0.0.1:8086"
-    endpoint: "/v1/chat/completions"
-    backend_model_name: "mistralai/Pixtral-12B-2409"
-    models:
-      - "pixtral-12b-2409"
-      - "pixtral-12b"
-    owned_by: "mistralai"
-
-  # Chat model
-  - name: "GPT-OSS-20B"
-    type: "chat"
-    backend: "http://127.0.0.1:8085"
-    endpoint: "/v1/chat/completions"
-    backend_model_name: "openai/gpt-oss-20b"
-    models:
-      - "gpt-oss-20b"
-    owned_by: "openai"
-
-  # Chat model with per-request defaults (Gemma 4 reasoning)
-  # --------------------------------------------------------
-  # `request_defaults` is shallow-merged into the outbound payload for this
-  # route before forwarding; any value the client sends wins. Gemma 4 only
-  # returns a separate `reasoning` field when the <|channel> delimiters survive
-  # detokenization, which requires `skip_special_tokens: false` on every
-  # request — and vLLM has no server-side default for that flag, so the gateway
-  # injects it here. `enable_thinking` turns reasoning on (the container also
-  # defaults this via --default-chat-template-kwargs; repeating it is harmless).
-  # NOTE: reliable for non-streaming responses. vLLM's *streaming* reasoning
-  # parser is still affected by upstream issue #38855, so streamed requests may
-  # still surface the <|channel> markers inline in `content`.
-  - name: "Gemma-4-26B-A4B"
-    type: "chat"
-    backend: "http://127.0.0.1:8000"
-    endpoint: "/v1/chat/completions"
-    backend_model_name: "google/gemma-4-26B-A4B-it"
-    models:
-      - "gemma-4-26b-a4b"
-      - "gemma-4-moe"
-    owned_by: "google"
+  # ---- chat, with request defaults ---------------------------------------
+  - name: "Reasoner-27B"                  # used in key allowlists, usage and logs
+    type: "chat"                          # chat | vision | embedding | reranker | stt | tts
+    backend: "http://127.0.0.1:8001"      # base URL of the model server
+    endpoint: "/v1/chat/completions"      # path on that server
+    backend_model_name: "example-org/reasoner-27b-it"   # the server's own name for the model
+    models:                               # aliases clients may use
+      - "reasoner-27b"
+      - "reasoner"
+    owned_by: "example-org"               # shown as owned_by in /v1/models
+    # Merged into the request body before forwarding, for things a backend
+    # needs on every request and has no server-side default for. A value the
+    # client sends always wins. A mapping (chat_template_kwargs below) is
+    # merged key by key, so the client can set one key and keep the others.
     request_defaults:
       skip_special_tokens: false
       chat_template_kwargs:
         enable_thinking: true
+    # Seconds to wait for the backend before answering 504. Overrides the
+    # endpoint's default (600 for chat, see README.md) for this route only.
+    timeout_s: 900
 
-  # Chat model with NO request_defaults (Muse Glimmer) — contrast with above
-  # ----------------------------------------------------------------------
-  # Muse Glimmer needs the opposite treatment to Gemma 4. Its vLLM reasoning
-  # parser (`--reasoning-parser muse_glimmer`) sets `skip_special_tokens: false`
-  # itself, so the gateway must NOT inject it. So this route carries no
-  # `request_defaults` at all.
-  #
-  # Reasoning strength is a chat-template kwarg and **defaults to `high`**:
-  # clients pass `chat_template_kwargs: {reasoning_strength: low|medium|high|
-  # xhigh}`. OpenAI's `reasoning_effort` and a "Reasoning: low" system message
-  # are both silently ignored (verified 2026-08-21). Deliberately NOT injected
-  # here as a default -- `high` is why you run this model; let callers opt down.
-  #
-  # Sampling matters here: it is a reasoning model that must not run greedy
-  # (Meta's recipe is temperature 1.0 / top_p 0.95 / top_k 64, served from the
-  # repo's generation_config.json via the container's `--generation-config
-  # auto`). The gateway deliberately does not pin sampling — a client that
-  # sends temperature 0 will get degraded, non-deterministic output anyway.
-  - name: "Muse-Glimmer-30B"
+  # ---- chat, a pool of two backends ----------------------------------------
+  # `backend` takes one URL or a list. With a list, requests alternate between
+  # the servers. A server that cannot be reached, drops the connection or
+  # answers 5xx is skipped for a while, and that request is tried once more on
+  # the other server. Every server of a pool must serve the same model.
+  - name: "Chat-Pool"
     type: "chat"
-    backend: "http://127.0.0.1:8092"
+    backend:
+      - "http://127.0.0.1:8002"
+      - "http://127.0.0.1:8003"
     endpoint: "/v1/chat/completions"
-    backend_model_name: "RedHatAI/Muse-Glimmer-30B-FP8-block"
+    backend_model_name: "example-org/chat-12b"
     models:
-      - "muse-glimmer-30b"
-      - "muse-glimmer"
-    owned_by: "meta"
+      - "chat-12b"
+      - "chat"
+    owned_by: "example-org"
 
-  # Speech-to-text
-  # `health_path: null` disables /health probing for this backend — the
-  # default Whisper server image doesn't expose /health, so the router's
-  # own /health endpoint would falsely report "unavailable". Any route may
-  # opt out the same way; omit the field to use the default '/health', or
-  # set it to another path if the backend exposes health on a custom URL.
-  - name: "Whisper-large-v3-turbo"
-    type: "stt"
-    backend: "http://127.0.0.1:8087"
-    endpoint: "/v1/audio/transcriptions"
-    backend_model_name: "whisper-large-v3-turbo"
-    health_path: null
+  # ---- vision (same endpoint as chat) --------------------------------------
+  - name: "Vision-12B"
+    type: "vision"
+    backend: "http://127.0.0.1:8004"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "example-org/vision-12b"
     models:
-      - "whisper-large-v3-turbo"
+      - "vision-12b"
+    owned_by: "example-org"
+    # To count tokens of streamed answers the router asks the backend for the
+    # usage event (stream_options.include_usage) and keeps that event from
+    # clients that did not ask for it. Set this to false only for a backend
+    # that rejects the option; its streamed requests are then counted without
+    # tokens. Default: true.
+    usage_from_stream: false
+
+  # ---- embeddings ----------------------------------------------------------
+  - name: "Embed-Large"
+    type: "embedding"
+    backend: "http://127.0.0.1:8005"
+    endpoint: "/v1/embeddings"
+    backend_model_name: "example-org/embed-large"
+    models:
+      - "embed-large"
+      - "text-embedding-3-large"          # an alias can mimic a well-known id
+    owned_by: "example-org"
+    # The path the router probes every ROUTER_HEALTH_INTERVAL seconds. Any
+    # answer below HTTP 500 counts as up. "/health" is the default, written
+    # out here; the reranker below shows another path.
+    health_path: "/health"
+
+  # ---- rerank --------------------------------------------------------------
+  - name: "Rerank-Base"
+    type: "reranker"
+    backend: "http://127.0.0.1:8006"
+    endpoint: "/v1/rerank"
+    backend_model_name: "example-org/rerank-base"
+    models:
+      - "rerank-base"
+    owned_by: "example-org"
+    health_path: "/ping"
+
+  # ---- speech-to-text ------------------------------------------------------
+  # `health_path: null` means: do not probe. The route then always counts as
+  # available. Use it for servers without a health endpoint.
+  - name: "Whisper-Large"
+    type: "stt"
+    backend: "http://127.0.0.1:8007"
+    endpoint: "/v1/audio/transcriptions"
+    backend_model_name: "whisper-large-v3"
+    models:
       - "whisper-large-v3"
       - "whisper-1"
-    owned_by: "openai"
-
-  # Text-to-speech — Kokoro also doesn't expose /health.
-  # The router additionally serves `GET /v1/audio/voices` for tts routes,
-  # forwarding to this backend's own voice listing (a kokoro-fastapi
-  # extension; open, no auth — like `/v1/models`). With one tts route it
-  # needs no args; clients with several can pass `?model=<alias>` to pick one.
-  - name: "Kokoro-82M"
-    type: "tts"
-    backend: "http://127.0.0.1:8880"
-    endpoint: "/v1/audio/speech"
-    backend_model_name: "kokoro-82m"
+    owned_by: "example-org"
     health_path: null
+
+  # ---- text-to-speech ------------------------------------------------------
+  # GET /v1/audio/voices is forwarded to the first tts route, or to the one
+  # named with ?model=<alias>.
+  - name: "Speech-82M"
+    type: "tts"
+    backend: "http://127.0.0.1:8008"
+    endpoint: "/v1/audio/speech"
+    backend_model_name: "speech-82m"
     models:
-      - "kokoro-82M"
-      - "kokoro"
+      - "speech-82m"
       - "tts-1"
-    owned_by: "remsem"
+    owned_by: "example-org"
+    health_path: null
 
-  # Example: load-balanced pool of backends
-  # ---------------------------------------
-  # `backend:` accepts either a single URL (shown above) or a list of URLs.
-  # With a list, the router round-robins requests across the pool. A backend
-  # that returns a 5xx or fails to connect is flagged unhealthy for
-  # ROUTER_UNHEALTHY_SECONDS (default 30s) and skipped during selection;
-  # non-streaming requests also get one retry against a different backend
-  # on the same failure. Streaming requests pick one backend with no retry.
-  #
-  # - name: "Chat-Pool"
-  #   type: "chat"
-  #   backend:
-  #     - "http://llm-1.internal:8000"
-  #     - "http://llm-2.internal:8000"
-  #   endpoint: "/v1/chat/completions"
-  #   backend_model_name: "openai/gpt-oss-20b"
-  #   models:
-  #     - "chat-pool"
-  #   owned_by: "openai"
+  # ---- a backend behind a proxy, with its own API key ----------------------
+  - name: "Tunnel-Chat"
+    type: "chat"
+    backend: "http://127.0.0.1:8009"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "example-org/tunnel-chat-8b"
+    models:
+      - "tunnel-chat"
+    owned_by: "example-org"
+    # Requests and health probes for this route go through this proxy:
+    # socks5h:// (the proxy resolves the host name), socks5://, http:// or
+    # https://. The backend address is then the one the proxy can reach.
+    proxy: "socks5h://127.0.0.1:1080"
+    # Name of an environment variable. Its value is sent to the backend as
+    # "Authorization: Bearer <value>". The client's own key is never forwarded.
+    # If the variable is unset the route still loads, with a warning.
+    backend_api_key_env: "TUNNEL_CHAT_API_KEY"
 
-  # Example: route a backend through the VPN sidecar
-  # ------------------------------------------------
-  # Any route may set an optional `proxy:` field. When set, the router dials
-  # the backend through that proxy. Supported schemes:
-  #   - socks5h://host:port   (preferred — remote DNS resolution via the tunnel)
-  #   - socks5://host:port    (DNS resolved locally)
-  #   - http://host:port
-  #
-  # Deploy the vpn-sidecar Quadlet unit (see deployment/vpn-sidecar.container)
-  # and uncomment this block to expose an internal endpoint that only exists
-  # inside the VPN:
-  #
-  # - name: "Internal-LLM"
-  #   type: "chat"
-  #   backend: "http://llm-internal.corp.example:8000"
-  #   endpoint: "/v1/chat/completions"
-  #   backend_model_name: "internal-llm"
-  #   proxy: "socks5h://127.0.0.1:1080"
-  #   models:
-  #     - "internal-llm"
-  #   owned_by: "internal"
-
-  # Example: backend that requires its own API key
-  # ------------------------------------------------
-  # If the upstream endpoint authenticates requests (e.g. a hosted
-  # third-party provider), point `backend_api_key_env` at an env var
-  # holding the key. The router will inject `Authorization: Bearer <key>`
-  # on outbound requests to this route only. The key is read once at
-  # startup; if the env var is unset the route still loads but logs a
-  # warning and sends requests without Authorization.
-  #
-  # - name: "Hosted-LLM"
-  #   type: "chat"
-  #   backend: "https://api.hosted-llm.example"
-  #   endpoint: "/v1/chat/completions"
-  #   backend_model_name: "hosted-llm-large"
-  #   backend_api_key_env: "HOSTED_LLM_API_KEY"
-  #   models:
-  #     - "hosted-llm"
-  #   owned_by: "hosted"
-
-  # Example: backends across TWO distinct VPN networks
-  # --------------------------------------------------
-  # Deploy a second sidecar (deployment/vpn-sidecar-b.container on Quadlet,
-  # or a second container in the k8s pod) listening on a different SOCKS
-  # port. Each route points at the tunnel it belongs to:
-  #
-  # - name: "Internal-LLM-Net-A"
-  #   type: "chat"
-  #   backend: "http://llm.corp-a.example:8000"
-  #   endpoint: "/v1/chat/completions"
-  #   backend_model_name: "internal-llm-a"
-  #   proxy: "socks5h://127.0.0.1:1080"
-  #   models:
-  #     - "internal-llm-a"
-  #   owned_by: "corp-a"
-  #
-  # - name: "Internal-LLM-Net-B"
-  #   type: "chat"
-  #   backend: "http://llm.corp-b.example:8000"
-  #   endpoint: "/v1/chat/completions"
-  #   backend_model_name: "internal-llm-b"
-  #   proxy: "socks5h://127.0.0.1:1081"
-  #   models:
-  #     - "internal-llm-b"
-  #   owned_by: "corp-b"
+# ---- another router as an upstream -------------------------------------------
+# Every model id the other router lists becomes usable here, without copying
+# its route list. Requests go to the same path on the upstream, with the
+# upstream key; `model` is not rewritten and no request_defaults apply. Local
+# routes win over upstream ids.
+#
+# upstreams:
+#   - name: "site-a"
+#     base_url: "http://127.0.0.1:8091"       # the other router
+#     api_key_env: "SITE_A_ROUTER_API_KEY"    # a key of that router, from the environment
+#     health_path: "/livez"                   # default; null = do not probe
+#     include: ["*"]                          # globs of model ids to take over (default: all)
+#     exclude: []                             # globs of model ids to leave out
+#     discovery_interval: 60                  # seconds between /v1/models calls (default)
+#     proxy: null                             # as on a route
+#     tls_verify: true                        # for an https base_url
+#     ca_file: null                           # CA bundle for an https base_url

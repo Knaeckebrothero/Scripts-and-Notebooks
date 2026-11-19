@@ -1,0 +1,114 @@
+# Sanitised copy of a live route config (structure, keys, aliases and
+# request_defaults are real; it must keep loading unchanged). Single GPU host,
+# every backend on loopback. Do not "tidy" this file: it is a compatibility
+# fixture.
+server:
+  host: "127.0.0.1"
+  port: 8091
+
+routes:
+  - name: "Qwen3-Embedding-8B"
+    type: "embedding"
+    backend: "http://127.0.0.1:8081"
+    endpoint: "/v1/embeddings"
+    backend_model_name: "Qwen/Qwen3-Embedding-8B"
+    models:
+      - "qwen3-embedding-8b"
+      - "text-embedding-3-large"
+    owned_by: "qwen"
+
+  - name: "Qwen3-Embedding-0.6B"
+    type: "embedding"
+    backend: "http://127.0.0.1:8083"
+    endpoint: "/v1/embeddings"
+    backend_model_name: "Qwen/Qwen3-Embedding-0.6B"
+    models:
+      - "qwen3-embedding-0.6b"
+      - "text-embedding-3-small"
+    owned_by: "qwen"
+
+  - name: "Qwen3-Reranker-8B"
+    type: "reranker"
+    backend: "http://127.0.0.1:8082"
+    endpoint: "/v1/rerank"
+    backend_model_name: "Qwen/Qwen3-Reranker-8B"
+    models:
+      - "qwen3-reranker-8b"
+      - "rerank-1"
+    owned_by: "qwen"
+
+  - name: "Gemma4-MoE-Chat-Pool"
+    type: "chat"
+    backend:
+      - "http://127.0.0.1:8088"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic"
+    models:
+      - "gemma-4-moe"
+      - "gemma-4-26b-a4b"
+    owned_by: "google"
+    request_defaults:
+      skip_special_tokens: false
+      chat_template_kwargs:
+        enable_thinking: true
+
+  - name: "Gemma4-MoE-Tutor"
+    type: "chat"
+    backend:
+      - "http://127.0.0.1:8088"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic"
+    models:
+      - "gpt-4o-mini"
+    owned_by: "google"
+    request_defaults:
+      skip_special_tokens: false
+      chat_template_kwargs:
+        enable_thinking: false
+
+  - name: "Gemma4-MoE-Vision-Pool"
+    type: "vision"
+    backend:
+      - "http://127.0.0.1:8088"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "RedHatAI/gemma-4-26B-A4B-it-FP8-Dynamic"
+    models:
+      - "gemma-4-moe-vision"
+      - "gpt-4o"
+    owned_by: "google"
+    request_defaults:
+      skip_special_tokens: false
+      chat_template_kwargs:
+        enable_thinking: true
+
+  - name: "Muse-Glimmer-30B"
+    type: "chat"
+    backend: "http://127.0.0.1:8092"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "RedHatAI/Muse-Glimmer-30B-FP8-block"
+    models:
+      - "muse-glimmer-30b"
+      - "muse-glimmer"
+    owned_by: "meta"
+
+  - name: "Whisper-large-v3"
+    type: "stt"
+    backend: "http://127.0.0.1:8087"
+    endpoint: "/v1/audio/transcriptions"
+    backend_model_name: "whisper-1"
+    health_path: null
+    models:
+      - "whisper-large-v3"
+      - "whisper-1"
+    owned_by: "openai"
+
+  - name: "Kokoro-TTS"
+    type: "tts"
+    backend: "http://127.0.0.1:8880"
+    endpoint: "/v1/audio/speech"
+    backend_model_name: "kokoro"
+    health_path: null
+    models:
+      - "kokoro"
+      - "tts-1"
+    owned_by: "remsky"
