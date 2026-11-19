@@ -1,0 +1,16 @@
+{% import "macros.html" as ui %}
+{# The masthead lamp. It loads after the page (so no page ever waits for the
+   router) and refreshes itself; without scripts it is a plain link. #}
+{% if lamp_loaded is defined and lamp_loaded %}
+{% set shape = {'ok': 'up', 'warn': 'warn', 'down': 'down', 'off': 'off'}[router.level] %}
+<a id="router-lamp" class="router-lamp" href="/models"
+   hx-get="/partials/router-lamp" hx-trigger="every 30s" hx-swap="outerHTML" hx-headers='{"X-Passive": "1"}'
+   title="{{ router.summary }}">
+  {{ ui.lamp(shape) }}<span class="lamp-text">{{ router.summary }}</span><span class="vh">. Open route status.</span>
+</a>
+{% else %}
+<a id="router-lamp" class="router-lamp" href="/models"
+   hx-get="/partials/router-lamp" hx-trigger="load" hx-swap="outerHTML" hx-headers='{"X-Passive": "1"}'>
+  {{ ui.lamp('unknown') }}<span class="lamp-text">Router status</span>
+</a>
+{% endif %}

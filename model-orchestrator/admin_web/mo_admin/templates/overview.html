@@ -1,0 +1,183 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Overview{% endblock %}
+{% block content %}
+<div id="overview" class="dims" hx-target="#overview" hx-select="#overview" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#overview">
+  <div class="page-head">
+    <div>
+      <h1>Overview</h1>
+      <p class="lede">
+        {% if not router.configured %}
+        Requests, tokens and keys for {{ period }}. Live route status is off because <code>ADMIN_ROUTER_URL</code> is not set.
+        {% elif not router.reachable %}
+        The router is not answering{% if router.error %} ({{ router.error }}){% endif %}. Usage below comes from the database and is unaffected.
+        {% elif router.routes_down %}
+        {{ router.routes_down|join(', ') }} {{ 'is' if router.routes_down|length == 1 else 'are' }} down. {{ router.summary }}{% if router.version %}, router version {{ router.version }}{% endif %}.
+        {% else %}
+        {{ router.summary }}{% if router.version %}, router version {{ router.version }}{% endif %}{% if router.database_ok %}, database connected{% endif %}.
+        {% endif %}
+      </p>
+    </div>
+    <div class="seg" role="group" aria-label="Period">
+      {% for code, label in ranges %}
+      <a id="range-{{ code }}" href="/{{ qs({'range': code if code != '7d' else None}) }}" hx-get="/{{ qs({'range': code if code != '7d' else None}) }}"{% if code == range %} aria-current="true"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="stack">
+    {% if note %}{{ ui.flash('info', note) }}{% endif %}
+
+    <dl class="sheet figures">
+      <div class="figure">
+        <dt>Requests</dt>
+        <dd class="value">{{ totals.requests|headline }}</dd>
+        <dd class="sub">{% if hourly_missing %}Today and yesterday, UTC{% else %}{{ ui.change(changes.requests, 'period') }}{% endif %}</dd>
+      </div>
+      <div class="figure">
+        <dt>Errors</dt>
+        <dd class="value">{{ totals.error_rate|pct }}{% if totals.requests %} <small>{{ totals.errors|num }}</small>{% endif %}</dd>
+        <dd class="sub">{% if hourly_missing %}From the daily totals{% elif previous.requests %}{{ previous.error_rate|pct }} in the previous period{% else %}No earlier data to compare{% endif %}</dd>
+      </div>
+      <div class="figure">
+        <dt>Tokens</dt>
+        {% if tokens_known %}
+        <dd class="value">{{ totals.tokens|compact }}</dd>
+        <dd class="sub">{% if tokens_since %}Counted since {{ tokens_since|day(false) }}{% else %}{{ totals.prompt_tokens|compact }} prompt, {{ totals.completion_tokens|compact }} completion{% endif %}</dd>
+        {% else %}
+        <dd class="value faint">–</dd>
+        <dd class="sub">No hourly usage recorded yet</dd>
+        {% endif %}
+      </div>
+      <div class="figure">
+        <dt>Active keys</dt>
+        <dd class="value">{{ active_keys|num }} <small>of {{ usable_keys|num }} usable</small></dd>
+        <dd class="sub">{{ total_keys|num }} {{ 'key' if total_keys == 1 else 'keys' }} in total</dd>
+      </div>
+    </dl>
+
+    <div class="cols cols-2-1">
+      <section class="sheet tall" aria-labelledby="chart-title">
+        <div class="sheet-head">
+          <h2 id="chart-title">Requests by route</h2>
+          <span class="aside">{% if hourly_missing %}{{ period }}{% else %}per {{ resolution }}, {{ period }}{% endif %}</span>
+        </div>
+        <div class="sheet-body">
+          {% if hourly_missing %}
+          <div class="chart-empty">
+            <div>
+              <p>This router records usage per day, so the last 24 hours cannot be drawn hour by hour. The totals above and the route list count today and yesterday.</p>
+              <p><a class="btn" href="/" hx-get="/">Show the daily trend for 7 days</a></p>
+            </div>
+          </div>
+          {% else %}
+          {{ ui.stacked(chart, 'Requests by route per ' ~ resolution, 'No requests in ' ~ period ~ '. Once clients call the router, their traffic shows up here.') }}
+          {% endif %}
+        </div>
+      </section>
+
+      <section class="sheet" aria-labelledby="board-title" id="route-board"
+               hx-get="{{ current_url }}" hx-select="#route-board" hx-target="#route-board" hx-swap="outerHTML" hx-push-url="false"
+               hx-trigger="every 45s" hx-indicator="#route-board" hx-headers='{"X-Passive": "1"}'>
+        <div class="sheet-head">
+          <h2 id="board-title">Routes</h2>
+          <a class="aside" href="/models">Model ids and status</a>
+        </div>
+        {% if board %}
+        <div class="board">
+          {% for row in board[:board_limit] %}
+          <div class="board-row">
+            <div class="board-name"><span class="swatch c{{ row.slot }}"></span><span title="{{ row.name }}">{{ row.name }}</span></div>
+            <div class="board-spark">{% if not hourly_missing %}{{ ui.spark(row.spark) }}{% endif %}</div>
+            <div class="board-figure"><b>{{ row.cell.requests|compact }}</b><span>{{ row.cell.error_rate|pct }} errors</span></div>
+            <div class="board-meta">
+              {% if router.configured %}{{ ui.route_state(router.route_state(row.name)) }}{% endif %}
+              {% if row.type %}<span>{{ row.type }}</span>{% endif %}
+              {% if not row.configured %}<span>no longer configured</span>{% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+        {% if board|length > board_limit %}<p class="sheet-foot">{{ board|length - board_limit }} quieter {{ 'route' if board|length - board_limit == 1 else 'routes' }} not shown. <a href="/models">See all routes</a>.</p>{% endif %}
+        {% else %}
+        <div class="empty">
+          <h3>No routes yet</h3>
+          <p>The router writes its configured routes to the database when it starts. Start it once and they appear here.</p>
+        </div>
+        {% endif %}
+      </section>
+    </div>
+
+    <div class="cols cols-2-1">
+      <section class="sheet" aria-labelledby="top-title">
+        <div class="sheet-head">
+          <h2 id="top-title">Busiest keys</h2>
+          <a class="aside" href="/usage{{ qs({'group': 'key'}) }}">Explore usage</a>
+        </div>
+        {% if top_keys %}
+        <div class="scroll">
+          <table class="table cards">
+            <thead>
+              <tr>
+                <th scope="col">Key</th>
+                <th scope="col">Owner</th>
+                <th scope="col" class="num">Requests</th>
+                <th scope="col"><span class="vh">Share of the busiest key</span></th>
+                <th scope="col" class="num">Errors</th>
+                <th scope="col" class="num">Tokens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in top_keys %}
+              <tr>
+                <td class="span">
+                  {% if row.key %}<a class="cell-main" href="/keys/{{ row.id }}">{{ row.key.name }}</a><span class="cell-sub mono">{{ row.key.key_prefix }}…</span>
+                  {% else %}<span class="cell-main">Deleted key #{{ row.id }}</span><span class="cell-sub">History is kept</span>{% endif %}
+                </td>
+                <td data-label="Owner">{{ row.key.owner if row.key else '–' }}</td>
+                <td class="num" data-label="Requests">{{ row.cell.requests|num }}</td>
+                <td class="meter-cell">{{ ui.meter(row.share) }}</td>
+                <td class="num" data-label="Errors">{{ row.cell.error_rate|pct }}</td>
+                <td class="num" data-label="Tokens">{{ row.cell.tokens|compact if tokens_known else '–' }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if more_keys %}<p class="sheet-foot">{{ more_keys }} more {{ 'key' if more_keys == 1 else 'keys' }} had traffic. <a href="/usage{{ qs({'group': 'key'}) }}">See all of them</a>.</p>{% endif %}
+        {% else %}
+        <div class="empty">
+          <h3>No key was used in {{ period }}</h3>
+          <p>{% if total_keys %}Keys exist, but none of them sent a request.{% else %}There are no keys yet. Create one and hand its secret to a client.{% endif %}</p>
+          {% if not total_keys %}<a class="btn btn-primary" href="/keys/new">{{ ui.icon('plus') }}Create a key</a>{% endif %}
+        </div>
+        {% endif %}
+      </section>
+
+      <section class="sheet" aria-labelledby="attention-title">
+        <div class="sheet-head">
+          <h2 id="attention-title">Keys to look at</h2>
+          {% if attention %}<span class="aside">{{ attention|length }}</span>{% endif %}
+        </div>
+        {% if attention %}
+        <ul class="attention">
+          {% for item in attention[:7] %}
+          <li>
+            <a class="cell-main" href="/keys/{{ item.key.id }}">{{ item.key.name }}</a>
+            {{ ui.key_badges(item.key) }}
+            <span class="why">{{ item.why }} {{ item.when|relative(now) }}, owner {{ item.key.owner }}</span>
+          </li>
+          {% endfor %}
+        </ul>
+        {% if attention|length > 7 %}<p class="sheet-foot"><a href="/keys{{ qs({'status': 'expiring'}) }}">Show expiring keys</a> or <a href="/keys{{ qs({'status': 'unused'}) }}">keys never used</a>.</p>{% endif %}
+        {% else %}
+        <div class="empty">
+          <h3>Nothing needs attention</h3>
+          <p>No key is expired or about to expire within {{ expiring_days }} days, and none has sat unused for long.</p>
+        </div>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+</div>
+{% endblock %}

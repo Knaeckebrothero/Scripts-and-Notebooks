@@ -1,0 +1,80 @@
+# Route config of the local demo stack (docker-compose.yaml).
+#
+# The backends are the fake model servers of scripts/demo_backends.py, reached
+# by their compose service name. Nothing here needs a GPU and every answer is
+# made up. For the full schema with comments see ../config.example.yaml.
+#
+# The stack mounts this directory, not the single file, so the router sees an
+# edit: save a change and it is live within about 20 seconds
+# (ROUTER_CONFIG_POLL_SECONDS). An invalid file is rejected and the running
+# config stays; `podman compose logs router` says why.
+
+routes:
+  # A pool: requests alternate between the two servers, and a failed attempt
+  # is retried once on the other one.
+  - name: "Demo-Chat"
+    type: "chat"
+    backend:
+      - "http://backends:9001"
+      - "http://backends:9002"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "demo/chat-7b"
+    models:
+      - "demo-chat"
+      - "demo-chat-latest"
+    owned_by: "demo"
+    # Merged into every request for this route. A value the client sends wins.
+    request_defaults:
+      temperature: 0.7
+      chat_template_kwargs:
+        enable_thinking: true
+
+  - name: "Demo-Vision"
+    type: "vision"
+    backend: "http://backends:9003"
+    endpoint: "/v1/chat/completions"
+    backend_model_name: "demo/vision-12b"
+    models:
+      - "demo-vision"
+    owned_by: "demo"
+
+  - name: "Demo-Embed"
+    type: "embedding"
+    backend: "http://backends:9004"
+    endpoint: "/v1/embeddings"
+    backend_model_name: "demo/embed-base"
+    models:
+      - "demo-embed"
+    owned_by: "demo"
+
+  - name: "Demo-Rerank"
+    type: "reranker"
+    backend: "http://backends:9005"
+    endpoint: "/v1/rerank"
+    backend_model_name: "demo/rerank-base"
+    models:
+      - "demo-rerank"
+    owned_by: "demo"
+
+  # Like the real servers, the two speech fakes have no /health: no probe.
+  - name: "Demo-Whisper"
+    type: "stt"
+    backend: "http://backends:9006"
+    endpoint: "/v1/audio/transcriptions"
+    backend_model_name: "demo/whisper"
+    health_path: null
+    models:
+      - "demo-whisper"
+      - "whisper-1"
+    owned_by: "demo"
+
+  - name: "Demo-Kokoro"
+    type: "tts"
+    backend: "http://backends:9007"
+    endpoint: "/v1/audio/speech"
+    backend_model_name: "demo/kokoro"
+    health_path: null
+    models:
+      - "demo-kokoro"
+      - "tts-1"
+    owned_by: "demo"

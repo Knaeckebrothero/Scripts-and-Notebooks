@@ -1,9 +1,12 @@
-# model-orchestrator.container — OpenAI API-compatible gateway
+# model-orchestrator.container: the router (OpenAI-compatible API)
 #
-# Runs loopback-only on 127.0.0.1:8091; the nginx unit (nginx.container)
-# terminates TLS on the public :8090 and proxies here. Requires Postgres
-# (orchestrator-db.container) — API keys and usage live there, managed via
-# the admin UI (admin-ui.container).
+#   127.0.0.1:8091  the API, plain HTTP. nginx.container terminates TLS on the
+#                   public port and proxies here.
+#   127.0.0.1:9095  internal: Prometheus /metrics and the detailed /health with
+#                   backend URLs. No auth. Never publish or proxy this port.
+#
+# Needs Postgres (orchestrator-db.container): keys and usage live there, and
+# the router applies its own schema migrations at start.
 [Unit]
 Description=Model Orchestrator - OpenAI API-compatible gateway
 After=network-online.target orchestrator-db.service
@@ -11,51 +14,54 @@ Wants=network-online.target
 
 [Container]
 ContainerName=model-orchestrator
-# HISTORY: `:latest` is a tag, not a promise -- `systemctl restart` reuses the
-# local image and does NOT re-pull. That cost us seven weeks: the 600s chat read
-# timeout (commit 936767e, 2026-06-29, pushed to GHCR by CI the same day) sat
-# undeployed behind a 2026-06-12 local image while the router kept enforcing the
-# old 120s default, 503'ing every Muse Glimmer call that needed longer -- which
-# is most DeepEval judge calls, at ~140s each. Found and fixed 2026-08-21.
-#
-# As of 2026-08-21 podman-auto-update.timer is ENABLED on this host (daily,
-# RandomizedDelaySec=900), so with AutoUpdate=registry below this unit now
-# tracks `:latest` unattended. That means whatever CI last pushed to main
-# reaches this gateway within ~24h without review. Restart is ~6s and podman
-# rolls back on healthcheck failure, but if you want a change gated, pin this
-# to a `sha-<short>` tag instead -- auto-update is then a no-op, exactly as it
-# already is for gemma4-moe-gpu1.
-#
-# MANUAL DEPLOY:  podman pull <image> && systemctl --user restart <unit>
-# VERIFY:         podman inspect <ctr> --format '{{.ImageName}} {{.Image}}'
-#                 and diff the running /app/main.py against the repo.
-# CHECK DRIFT:    podman auto-update --dry-run    (read-only)
+# Image tags: `latest` and `vX.Y.Z` are published only when a release is
+# tagged; every build of main is published as `sha-<short>`. With
+# AutoUpdate=registry and podman-auto-update.timer enabled, this unit follows
+# releases unattended. To hold a version, pin `vX.Y.Z` or `sha-<short>` here.
+# A plain `systemctl restart` never pulls. To update by hand:
+#   podman pull <image> && systemctl --user restart model-orchestrator
+# What is running:  curl -s http://127.0.0.1:9095/health  (version, git_sha)
 Image=ghcr.io/knaeckebrothero/model-orchestrator:latest
 AutoUpdate=registry
 Network=host
+# On stop the router gives requests in flight ROUTER_SHUTDOWN_GRACE_SECONDS
+# (default 8) and then ends them with an answer. That fits Podman's stop
+# timeout of 10 s. To give long requests more time, raise all three together:
+#   Environment=ROUTER_SHUTDOWN_GRACE_SECONDS=25
+#   StopTimeout=30
+#   and TimeoutStopSec=45 in [Service] below
 
-# Read-only bind mount of the YAML config (server + routes; no keys in YAML)
+# The route config: no keys and no secrets in it. Check a change first:
+#   podman run --rm -v <file>:/app/config.yaml:ro,z <image> \
+#     python -m model_orchestrator check-config /app/config.yaml
+# The router reloads the file when it changes, but a single-file mount only
+# shows edits made in place. An editor that replaces the file needs
+# `systemctl --user restart model-orchestrator`, or mount a directory:
+#   Volume=%h/.config/model-orchestrator/routes:/etc/model-orchestrator:ro,z
+#   Environment=ROUTER_CONFIG=/etc/model-orchestrator/config.yaml
 Volume=%h/.config/model-orchestrator/config.yaml:/app/config.yaml:ro,z
+Environment=ROUTER_CONFIG=/app/config.yaml
 
-# ROUTER_DATABASE_URL lives in router.env (chmod 600, see router.env.example)
+# ROUTER_DATABASE_URL and backend keys: router.env (chmod 600), see router.env.example
 EnvironmentFile=%h/.config/model-orchestrator/router.env
-# Loopback-only behind the nginx TLS terminator, which owns the public :8090.
 Environment=ROUTER_HOST=127.0.0.1
 Environment=ROUTER_PORT=8091
-Environment=ROUTER_CONFIG=/app/config.yaml
-Environment=ROUTER_LOG_LEVEL=INFO
+Environment=ROUTER_METRICS_PORT=9095
 
-# Use python+urllib (always present in the image, unlike curl) so podman can
-# actually run the probe. Exits 0 on HTTP 200, non-zero otherwise.
-HealthCmd=python -c "import sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8091/health', timeout=5); sys.exit(0 if r.status==200 else 1)"
+# /livez answers as long as the process runs. It touches neither the database
+# nor a backend, so an outage elsewhere never restarts the router. python is
+# always in the image; curl is not.
+HealthCmd=python -c "import sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8091/livez', timeout=3); sys.exit(0 if r.status==200 else 1)"
 HealthInterval=30s
-HealthTimeout=10s
+HealthTimeout=5s
 HealthStartPeriod=15s
 HealthRetries=3
 
 [Service]
 Restart=on-failure
 RestartSec=10
+# The start waits up to 60 s for Postgres, then applies migrations and probes
+# every backend once.
 TimeoutStartSec=120
 TimeoutStopSec=30
 

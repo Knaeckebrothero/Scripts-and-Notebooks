@@ -1,24 +1,51 @@
 name: model-orchestrator
 
-# Build and push the AI Model Router image and its Streamlit admin UI to GHCR.
+# Test, build and publish the model router and its admin frontends.
+#
+# Images (ghcr.io/knaeckebrothero/...):
+#   model-orchestrator             the router
+#   model-orchestrator-admin-web   the admin website
+#   model-orchestrator-admin-ui    the old Streamlit admin UI (until retired)
 #
 # Triggers:
-#   - push to main when files under model-orchestrator/ (or this workflow) change
-#   - manual workflow_dispatch (always builds)
+#   - pull request or push to main touching model-orchestrator/
+#     (Markdown-only changes do not trigger anything)
+#   - a release tag (see below)
+#   - manual workflow_dispatch
 #
-# Images:
-#   ghcr.io/knaeckebrothero/model-orchestrator
-#   ghcr.io/knaeckebrothero/model-orchestrator-admin-ui
+# Tags published:
+#   - sha-<short>   every build on main, on a release tag, or by dispatch
+#   - vX.Y.Z        on a release tag
+#   - latest        ONLY on a release tag
 #
-# Tags:
-#   - sha-<short>   always
-#   - latest        on push to main / dispatch from main
+# Release tags (each releases exactly one image):
+#   model-orchestrator-vX.Y.Z
+#   model-orchestrator-admin-web-vX.Y.Z
+#   model-orchestrator-admin-ui-vX.Y.Z
+#
+# WHY `latest` IS RELEASE-ONLY: one deployment auto-updates from `latest`
+# every night. If `latest` followed main, every merge would reach that
+# deployment unreviewed within a day. With this rule, work on main is piloted
+# elsewhere by `sha-` pin, and `latest` moves only when a release is cut on
+# purpose. Do not add `latest` back to branch builds.
+#
+# Nothing is published unless the tests of that image pass.
 
 on:
   push:
     branches: [main]
     paths:
       - 'model-orchestrator/**'
+      - '!model-orchestrator/**/*.md'
+      - '.github/workflows/model-orchestrator.yml'
+    tags:
+      - 'model-orchestrator-v*'
+      - 'model-orchestrator-admin-web-v*'
+      - 'model-orchestrator-admin-ui-v*'
+  pull_request:
+    paths:
+      - 'model-orchestrator/**'
+      - '!model-orchestrator/**/*.md'
       - '.github/workflows/model-orchestrator.yml'
   workflow_dispatch:
 
@@ -26,13 +53,188 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
+  UV_VERSION: "0.7.12"
 
 jobs:
-  build:
+  # Decides which parts changed, and whether this run is a release.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      router: ${{ steps.plan.outputs.router }}
+      admin_web: ${{ steps.plan.outputs.admin_web }}
+      admin_ui: ${{ steps.plan.outputs.admin_ui }}
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Plan
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          BEFORE: ${{ github.event.before }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          SHA: ${{ github.sha }}
+        run: |
+          router=false; admin_web=false; admin_ui=false; release=""; version=""
+          all() { router=true; admin_web=true; admin_ui=true; }
+
+          if [ "$REF_TYPE" = "tag" ]; then
+            tag="${REF#refs/tags/}"
+            case "$tag" in
+              model-orchestrator-admin-web-v*)
+                release=admin-web; admin_web=true; version="${tag#model-orchestrator-admin-web-v}" ;;
+              model-orchestrator-admin-ui-v*)
+                release=admin-ui; admin_ui=true; version="${tag#model-orchestrator-admin-ui-v}" ;;
+              model-orchestrator-v*)
+                release=router; router=true; version="${tag#model-orchestrator-v}" ;;
+            esac
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            all
+          else
+            base="$BEFORE"
+            [ "$EVENT" = "pull_request" ] && base="$PR_BASE"
+            if [ -z "$base" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              all
+            else
+              while IFS= read -r f; do
+                case "$f" in
+                  .github/workflows/model-orchestrator.yml) all ;;
+                  model-orchestrator/*.md) ;;
+                  model-orchestrator/admin_ui/*) admin_ui=true ;;
+                  model-orchestrator/admin_web/*) admin_web=true ;;
+                  model-orchestrator/migrations/*) router=true; admin_web=true ;;
+                  model-orchestrator/*) router=true ;;
+                esac
+              done < <(git diff --name-only "$base" "$SHA")
+            fi
+          fi
+
+          {
+            echo "router=$router"
+            echo "admin_web=$admin_web"
+            echo "admin_ui=$admin_ui"
+            echo "release=$release"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+          echo "router=$router admin_web=$admin_web admin_ui=$admin_ui release=$release version=$version"
+
+  router-checks:
+    needs: plan
+    if: needs.plan.outputs.router == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: model-orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install "uv==${UV_VERSION}"
+      - run: uv sync --frozen
+      - name: Lint
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+      - name: Type check
+        run: uv run mypy
+      - name: Unit tests
+        run: uv run pytest tests/unit
+
+  # The contract suite: the router as a black box against fake backends and a
+  # real Postgres. Both supported Postgres versions.
+  router-e2e:
+    needs: plan
+    if: needs.plan.outputs.router == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}-alpine
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/postgres
+    defaults:
+      run:
+        working-directory: model-orchestrator
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install "uv==${UV_VERSION}"
+      - run: uv sync --frozen
+      - name: End-to-end suite
+        env:
+          ROUTER_TARGET: new
+        run: uv run pytest tests/e2e tests/fakes
+
+  admin-web-tests:
+    needs: plan
+    if: needs.plan.outputs.admin_web == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:test@127.0.0.1:5432/postgres
+    defaults:
+      run:
+        working-directory: model-orchestrator/admin_web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - run: pip install "uv==${UV_VERSION}"
+      - run: uv sync --frozen
+      - run: uv run pytest
+
+  # Builds each image that is due. A pull request builds without publishing.
+  images:
+    needs: [plan, router-checks, router-e2e, admin-web-tests]
+    # Run when the tests that were due have passed. A job skipped because its
+    # part did not change must not block the others.
+    if: >-
+      always()
+      && needs.plan.result == 'success'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       packages: write
@@ -40,44 +242,141 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - image: knaeckebrothero/model-orchestrator
+          - part: router
+            image: knaeckebrothero/model-orchestrator
             context: ./model-orchestrator
-            file: ./model-orchestrator/Dockerfile
-          - image: knaeckebrothero/model-orchestrator-admin-ui
+          - part: admin-web
+            image: knaeckebrothero/model-orchestrator-admin-web
+            context: ./model-orchestrator/admin_web
+          - part: admin-ui
+            image: knaeckebrothero/model-orchestrator-admin-ui
             context: ./model-orchestrator/admin_ui
-            file: ./model-orchestrator/admin_ui/Dockerfile
     steps:
+      - name: Is this image due?
+        id: due
+        env:
+          PART: ${{ matrix.part }}
+          ROUTER: ${{ needs.plan.outputs.router }}
+          ADMIN_WEB: ${{ needs.plan.outputs.admin_web }}
+          ADMIN_UI: ${{ needs.plan.outputs.admin_ui }}
+          RELEASE: ${{ needs.plan.outputs.release }}
+        run: |
+          case "$PART" in
+            router) due="$ROUTER" ;;
+            admin-web) due="$ADMIN_WEB" ;;
+            admin-ui) due="$ADMIN_UI" ;;
+          esac
+          release=false
+          [ "$RELEASE" = "$PART" ] && release=true
+          echo "build=$due" >> "$GITHUB_OUTPUT"
+          echo "release=$release" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
+        if: steps.due.outputs.build == 'true'
 
       - uses: docker/setup-buildx-action@v3
+        if: steps.due.outputs.build == 'true'
         with:
           buildkitd-config-inline: |
             [registry."docker.io"]
               mirrors = ["mirror.gcr.io"]
 
       - uses: docker/login-action@v3
+        if: steps.due.outputs.build == 'true' && github.event_name != 'pull_request'
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Extract metadata
+        if: steps.due.outputs.build == 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ matrix.image }}
           tags: |
             type=sha,format=short,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=v${{ needs.plan.outputs.version }},enable=${{ steps.due.outputs.release == 'true' }}
+            type=raw,value=latest,enable=${{ steps.due.outputs.release == 'true' }}
 
-      - name: Build and push
+      - name: Short commit id
+        if: steps.due.outputs.build == 'true'
+        id: sha
+        run: echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # Build into the local daemon first and prove the image starts, so a
+      # packaging mistake never reaches the registry.
+      - name: Build
+        if: steps.due.outputs.build == 'true'
         uses: docker/build-push-action@v5
         with:
           context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          load: true
+          tags: smoke/${{ matrix.part }}:test
+          build-args: |
+            ROUTER_VERSION=${{ needs.plan.outputs.version || format('0.0.0.dev0+{0}', steps.sha.outputs.short) }}
+            ROUTER_GIT_SHA=${{ steps.sha.outputs.short }}
           provenance: false
           cache-from: type=gha,scope=${{ matrix.image }},ignore-error=true
           cache-to: type=gha,mode=min,scope=${{ matrix.image }},ignore-error=true
+
+      - name: Smoke test (router)
+        if: steps.due.outputs.build == 'true' && matrix.part == 'router'
+        run: |
+          set -eu
+          # The shipped example config must be valid for the shipped code.
+          docker run --rm smoke/router:test python -m model_orchestrator check-config /app/config.yaml
+          # Start against a real Postgres: migrations apply, the API answers.
+          docker run -d --name smoke-pg -e POSTGRES_PASSWORD=test postgres:17-alpine
+          for i in $(seq 1 30); do
+            docker exec smoke-pg pg_isready -U postgres >/dev/null 2>&1 && break
+            sleep 1
+          done
+          docker run -d --name smoke-router --network container:smoke-pg \
+            -e ROUTER_DATABASE_URL=postgresql://postgres:test@127.0.0.1:5432/postgres \
+            smoke/router:test
+          ok=false
+          for i in $(seq 1 30); do
+            if docker exec smoke-router python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/livez', timeout=2).status == 200 else 1)" 2>/dev/null; then
+              ok=true; break
+            fi
+            sleep 1
+          done
+          docker logs smoke-router | tail -n 40
+          [ "$ok" = true ]
+          docker exec smoke-router python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8090/health', timeout=5).read().decode())"
+          docker rm -f smoke-router smoke-pg >/dev/null
+
+      - name: Smoke test (admin website)
+        if: steps.due.outputs.build == 'true' && matrix.part == 'admin-web'
+        run: |
+          set -eu
+          # No database behind this URL on purpose: /livez must answer without one.
+          docker run -d --name smoke-admin \
+            -e ADMIN_DATABASE_URL=postgresql://smoke:smoke@127.0.0.1:1/smoke \
+            -e ADMIN_LOCAL_PASSWORD=smoke-test-password \
+            smoke/admin-web:test
+          ok=false
+          for i in $(seq 1 30); do
+            if docker exec smoke-admin python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8600/livez', timeout=2).status == 200 else 1)" 2>/dev/null; then
+              ok=true; break
+            fi
+            sleep 1
+          done
+          docker logs smoke-admin | tail -n 40
+          [ "$ok" = true ]
+          docker rm -f smoke-admin >/dev/null
+
+      - name: Publish
+        if: steps.due.outputs.build == 'true' && github.event_name != 'pull_request'
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            ROUTER_VERSION=${{ needs.plan.outputs.version || format('0.0.0.dev0+{0}', steps.sha.outputs.short) }}
+            ROUTER_GIT_SHA=${{ steps.sha.outputs.short }}
+          provenance: false
+          cache-from: type=gha,scope=${{ matrix.image }},ignore-error=true

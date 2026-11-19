@@ -1,0 +1,21 @@
+{% extends "auth_base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}No access{% endblock %}
+{% block card_class %} wide{% endblock %}
+{% block card %}
+<div class="sheet">
+  <div class="sheet-body stack">
+    <h1>This account has no access</h1>
+    <p>You signed in as <strong>{{ username }}</strong>, but this console is limited to accounts with the role <strong>{{ required_role }}</strong>.</p>
+    {% if not roles_found %}
+    <p class="muted">The identity provider sent no roles at <code>{{ role_claim }}</code>. If the role is assigned, the provider's client is probably not adding roles to the token.</p>
+    {% else %}
+    <p class="muted">Ask whoever manages the identity provider to assign the role, then sign in again.</p>
+    {% endif %}
+    <p class="head-actions">
+      {% if logout_url %}<a class="btn btn-primary" href="{{ logout_url }}">Sign in with another account</a>{% endif %}
+      <a class="btn" href="/login">Back to sign in</a>
+    </p>
+  </div>
+</div>
+{% endblock %}

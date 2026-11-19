@@ -4,6 +4,9 @@
 # Secrets / credentials (never commit)
 credentials.txt
 
+# Private notes, kept out of this public repository.
+docs_uni_infra/
+
 # SQLite database files
 *.db
 

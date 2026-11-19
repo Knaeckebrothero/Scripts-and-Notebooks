@@ -1,0 +1,16 @@
+{% extends "auth_base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}{{ title }}{% endblock %}
+{% block card_class %} wide{% endblock %}
+{% block card %}
+<div class="sheet">
+  <div class="sheet-body stack">
+    <p class="muted small">Error {{ code }}</p>
+    <h1>{{ title }}</h1>
+    <p>{{ message }}</p>
+    <p class="head-actions">
+      {% if user %}<a class="btn btn-primary" href="/">Go to the overview</a>{% else %}<a class="btn btn-primary" href="/login">Go to sign in</a>{% endif %}
+    </p>
+  </div>
+</div>
+{% endblock %}

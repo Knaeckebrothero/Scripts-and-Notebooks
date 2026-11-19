@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Audit log{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Audit log</h1>
+    <p class="lede">Every change made in this console, and every sign-in. Secrets and their hashes are never written here.</p>
+  </div>
+</div>
+
+<div id="audit-results" class="sheet dims" hx-target="#audit-results" hx-select="#audit-results" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#audit-results">
+  <form class="toolbar" method="get" action="/audit" hx-get="/audit" hx-trigger="change, submit, input changed delay:300ms from:#audit-actor" hx-sync="this:replace">
+    <div class="seg" role="group" aria-label="Kind of entry">
+      {% for code, label in kinds.items() %}
+      {% set href = '/audit' ~ qs({'kind': code if code != 'all' else None, 'actor': actor or None}) %}
+      <a id="kind-{{ code }}" href="{{ href }}" hx-get="{{ href }}"{% if code == kind %} aria-current="true"{% endif %}>{{ label }}</a>
+      {% endfor %}
+    </div>
+    {% if kind != 'all' %}<input type="hidden" name="kind" value="{{ kind }}">{% endif %}
+    <div class="inline-field">
+      <label for="audit-actor">By</label>
+      <input class="input" id="audit-actor" name="actor" type="search" value="{{ actor }}" placeholder="Anyone" autocomplete="off" spellcheck="false" hx-preserve="true">
+    </div>
+    <noscript><button type="submit" class="btn">Apply</button></noscript>
+  </form>
+
+  {% if entries %}
+  <div class="scroll">
+    <table class="table cards">
+      <thead>
+        <tr>
+          <th scope="col">When</th>
+          <th scope="col">Who</th>
+          <th scope="col">What</th>
+          <th scope="col">Details</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for entry in entries %}
+        <tr class="top">
+          <td data-label="When" class="nowrap">
+            <time datetime="{{ entry.at|iso }}">{{ entry.at|clock }}</time>
+            <span class="cell-sub">{{ entry.at|relative(now) }}</span>
+          </td>
+          <td data-label="Who">
+            {{ entry.actor_name }}
+            {% if entry.actor_kind %}<span class="cell-sub">{{ entry.actor_kind }}</span>{% endif %}
+          </td>
+          <td data-label="What" class="span">
+            {{ ui.badge(entry.tone, entry.title) }}
+            {% if entry.subject %}
+            <span class="cell-sub">
+              {% if entry.key_exists %}<a href="/keys/{{ entry.key_id }}">{{ entry.subject }}</a>{% else %}{{ entry.subject }}{% endif %}
+              {% if entry.prefix %}<span class="mono">{{ entry.prefix }}…</span>{% endif %}
+            </span>
+            {% endif %}
+          </td>
+          <td data-label="Details" class="span">
+            {% if entry.lines %}<ul>{% for line in entry.lines %}<li>{{ line }}</li>{% endfor %}</ul>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if older_href or paged %}
+  <p class="sheet-foot head-actions">
+    {% if paged %}<a class="btn btn-small" id="audit-newest" href="{{ newest_href }}" hx-get="{{ newest_href }}">Newest</a>{% endif %}
+    {% if older_href %}<a class="btn btn-small" id="audit-older" href="{{ older_href }}" hx-get="{{ older_href }}">Older entries</a>{% endif %}
+  </p>
+  {% endif %}
+  {% elif filtered or paged %}
+  <div class="empty">
+    <h2>No entries match</h2>
+    <p>Nothing in the log fits this filter.</p>
+    <a class="btn" href="/audit" hx-get="/audit">Show everything</a>
+  </div>
+  {% else %}
+  <div class="empty">
+    <h2>The log is empty</h2>
+    <p>Sign-ins and key changes are recorded from now on. Create, edit, disable or delete a key and it shows up here with who did it.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

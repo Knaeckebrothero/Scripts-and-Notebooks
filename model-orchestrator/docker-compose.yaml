@@ -1,75 +1,99 @@
-# Local dev/test stack: Postgres + router + admin UI + nginx TLS termination.
-# Mirrors the production quadlet layout (deployment/*.container) on a bridge
-# network. Works with `docker compose up --build` or `podman-compose up --build`.
+# Local demo stack: the router in front of fake model backends, with Postgres
+# and the admin website. No GPU, no real model, nothing leaves this machine.
 #
-# TLS needs a cert pair in ./certs (gitignored). Self-signed for local use:
-#   mkdir -p certs && openssl req -x509 -newkey rsa:2048 -nodes \
-#     -keyout certs/server.key -out certs/server.crt -days 365 \
-#     -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+#   podman compose up --build -d      # or podman-compose, or docker compose
+#   podman compose logs -f router
+#   podman compose down -v            # stop, and delete the demo database
 #
-# Then:
-#   https://localhost:8090/v1/models   (API — empty key table rejects auth'd
-#                                       calls until a key is created in the UI)
-#   https://localhost:8501             (admin UI, admin/admin)
+#   http://127.0.0.1:8600   admin website: user "admin", password "demo-password-123"
+#   http://127.0.0.1:8090   the API (create a key in the admin website first)
+#   http://127.0.0.1:9095   the router's internal port: /metrics and detailed /health
 #
-# The example config's backends point at 127.0.0.1 ports that don't exist in
-# this network — fine for exercising auth/keys/usage; mount a real config
-# over /app/config.yaml to test against live backends.
+# README.md, "Quick start", walks through it. Everything is published on
+# 127.0.0.1 only. If a port is taken, pick another one:
+#
+#   DEMO_ROUTER_PORT=18090 DEMO_ADMIN_PORT=18600 DEMO_METRICS_PORT=19095 podman compose up --build -d
+#
+# The passwords in this file are for the demo. Do not reuse them.
+
+name: model-orchestrator-demo
 
 services:
   db:
-    image: docker.io/library/postgres:17
+    image: docker.io/library/postgres:17-alpine
     environment:
       POSTGRES_DB: orchestrator
       POSTGRES_USER: orchestrator
-      POSTGRES_PASSWORD: orchestrator
+      POSTGRES_PASSWORD: demo-only
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -q -h 127.0.0.1 -U orchestrator -d orchestrator"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    ports:
-      - "127.0.0.1:5432:5432"   # convenience: psql from the host
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  # Stand-ins for vLLM, TEI, a reranker, Whisper and Kokoro on ports 9001-9007
+  # (scripts/demo_backends.py). Reachable only from inside the stack.
+  backends:
+    build:
+      context: .
+      dockerfile: demo/backends.Dockerfile
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9001/health', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
 
   router:
     build: .
     environment:
-      ROUTER_DATABASE_URL: postgresql://orchestrator:orchestrator@db:5432/orchestrator
-      ROUTER_LOG_LEVEL: DEBUG
-    depends_on:
-      db:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:8091:8090"   # plain-HTTP side door for debugging
-
-  admin-ui:
-    build: ./admin_ui
-    environment:
-      DATABASE_URL: postgresql://orchestrator:orchestrator@db:5432/orchestrator
-      UI_ADMIN_USER: admin
-      UI_ADMIN_PASSWORD: admin
-    depends_on:
-      db:
-        condition: service_healthy
-    ports:
-      - "127.0.0.1:8502:8501"   # plain-HTTP side door for debugging
-
-  nginx:
-    image: docker.io/library/nginx:1.27-alpine
+      ROUTER_DATABASE_URL: postgresql://orchestrator:demo-only@db:5432/orchestrator
+      ROUTER_CONFIG: /etc/model-orchestrator/config.yaml
     volumes:
-      - ./deployment/nginx/orchestrator.conf.template:/etc/nginx/templates/default.conf.template:ro
-      - ./certs:/etc/nginx/certs:ro
-    environment:
-      ROUTER_UPSTREAM: http://router:8090
-      UI_UPSTREAM: http://admin-ui:8501
+      # The directory, not the file: an edit of demo/config.yaml reloads the
+      # router without a restart. ":z" lets the container read it under SELinux.
+      - ./demo:/etc/model-orchestrator:ro,z
     depends_on:
-      - router
-      - admin-ui
+      db:
+        condition: service_healthy
+      backends:
+        condition: service_healthy
     ports:
-      - "8090:8090"
-      - "8501:8501"
+      - "127.0.0.1:${DEMO_ROUTER_PORT:-8090}:8090"
+      # Internal port. Published here, on loopback, so the demo can show it.
+      # A real deployment does not publish it.
+      - "127.0.0.1:${DEMO_METRICS_PORT:-9095}:9095"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/livez', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  admin-web:
+    build: ./admin_web
+    environment:
+      ADMIN_DATABASE_URL: postgresql://orchestrator:demo-only@db:5432/orchestrator
+      ADMIN_ROUTER_URL: http://router:8090
+      ADMIN_LOCAL_USER: admin
+      # At least 12 characters, or the website does not start.
+      ADMIN_LOCAL_PASSWORD: demo-password-123
+      # Reached directly, with no proxy in front: do not believe X-Forwarded-*.
+      # The website warns at start about plain HTTP and the missing session
+      # secret. That is expected here, on loopback, and wrong anywhere else.
+      ADMIN_TRUST_PROXY_HEADERS: "off"
+    depends_on:
+      # The router applies the migrations; the website only uses the tables
+      # and shows "schema not initialised" until they are there.
+      router:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${DEMO_ADMIN_PORT:-8600}:8600"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8600/livez', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
 volumes:
   db-data:

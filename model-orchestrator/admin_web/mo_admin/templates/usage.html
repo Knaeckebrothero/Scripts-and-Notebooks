@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Usage{% endblock %}
+
+{% macro group_cell(row) -%}
+{% if f.group == 'key' %}
+  {% if row.key %}<a class="cell-main" href="/keys/{{ row.group }}">{{ row.label }}</a><span class="cell-sub">{{ row.key.owner }}</span>
+  {% else %}<span class="cell-main">{{ row.label }}</span><span class="cell-sub">History is kept</span>{% endif %}
+{% elif f.group == 'model' %}<span class="cell-main mono">{{ row.label }}</span>
+{% elif f.group == 'outcome' %}<span class="cell-main">{{ row.label }}</span><span class="cell-sub mono">{{ row.group }}</span>
+{% else %}<span class="cell-main">{{ row.label }}</span>{% endif %}
+{%- endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Usage</h1>
+    <p class="lede">Pick a period and a breakdown. Requests and errors come from the daily totals; tokens, durations and refused requests from hourly usage.</p>
+  </div>
+</div>
+
+<div id="usage-results" class="stack dims" hx-target="#usage-results" hx-select="#usage-results" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#usage-results">
+  <form class="sheet toolbar" method="get" action="/usage" hx-get="/usage" hx-trigger="change, submit" hx-sync="this:replace">
+    <div class="inline-field">
+      <label for="from">From</label>
+      <input class="input" type="date" id="from" name="from" value="{{ f.start|iso }}" max="{{ today|iso }}" required>
+    </div>
+    <div class="inline-field">
+      <label for="to">to</label>
+      <input class="input" type="date" id="to" name="to" value="{{ f.end|iso }}" max="{{ today|iso }}" required>
+    </div>
+    <div class="seg" role="group" aria-label="Quick periods">
+      {% for text, query, current in presets %}
+      <a id="preset-{{ loop.index }}" href="/usage{{ query }}" hx-get="/usage{{ query }}"{% if current %} aria-current="true"{% endif %}>{{ text }}</a>
+      {% endfor %}
+    </div>
+    <div class="inline-field">
+      <label for="group">Group by</label>
+      <select class="select" id="group" name="group" data-autosubmit>
+        {% for code, label in dimensions.items() %}<option value="{{ code }}"{% if code == f.group %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="inline-field">
+      <label for="by">Rows</label>
+      <select class="select" id="by" name="by" data-autosubmit>
+        <option value=""{% if not f.per_day %} selected{% endif %}>Totals</option>
+        <option value="day"{% if f.per_day %} selected{% endif %}>Per day</option>
+      </select>
+    </div>
+    <noscript><button type="submit" class="btn">Apply</button></noscript>
+    <span class="grow"></span>
+    <a class="btn" href="{{ csv_href }}" hx-boost="false" download>{{ ui.icon('download') }}Export CSV</a>
+  </form>
+
+  {% for text in f.notes %}{{ ui.flash('info', text) }}{% endfor %}
+
+  {% if hourly_only and not rows %}
+  <div class="sheet empty">
+    <h2>Nothing to group by {{ group_label|lower }} here</h2>
+    <p>{% if tokens_known %}There is no hourly usage between {{ f.start|day }} and {{ f.end|day }}.{% else %}Model ids and outcomes come from hourly usage, and none has been recorded yet.{% endif %} Group by route, key or owner to see the daily request counts.</p>
+    <a class="btn" href="/usage{{ qs(state, group='route') }}" hx-get="/usage{{ qs(state, group='route') }}">Group by route</a>
+  </div>
+  {% elif not rows %}
+  <div class="sheet empty">
+    <h2>No usage in this period</h2>
+    <p>Nothing was recorded between {{ f.start|day }} and {{ f.end|day }}. Try a longer period.</p>
+    <a class="btn" href="/usage{{ qs(state, **{'from': None, 'to': None}) }}" hx-get="/usage{{ qs(state, **{'from': None, 'to': None}) }}">Show the last 30 days</a>
+  </div>
+  {% else %}
+
+  {% if chart %}
+  <section class="sheet" aria-labelledby="usage-chart-title">
+    <div class="sheet-head">
+      <h2 id="usage-chart-title">Requests per day by {{ group_label|lower }}</h2>
+      <span class="aside">{{ f.start|day }} to {{ f.end|day }}, {{ days }} days</span>
+    </div>
+    <div class="sheet-body">
+      {{ ui.stacked(chart, 'Requests per day by ' ~ group_label|lower) }}
+    </div>
+  </section>
+  {% endif %}
+
+  <section class="sheet" aria-labelledby="usage-table-title">
+    <div class="sheet-head">
+      <h2 id="usage-table-title">{{ 'Per day' if f.per_day else 'Totals' }} by {{ group_label|lower }}</h2>
+      <span class="aside">
+        {% if not tokens_known %}Tokens and durations appear once hourly usage is recorded
+        {% elif tokens_since %}Tokens and durations counted since {{ tokens_since|day }}
+        {% else %}{{ rows|length }} {{ 'row' if rows|length == 1 else 'rows' }}{% endif %}
+      </span>
+    </div>
+    <div class="scroll">
+      <table class="table cards">
+        <thead>
+          <tr>
+            {% if f.per_day %}<th scope="col">Day</th>{% endif %}
+            <th scope="col">{{ group_label }}</th>
+            <th scope="col" class="num">Requests</th>
+            {% if not f.per_day %}<th scope="col"><span class="vh">Share of the largest</span></th>{% endif %}
+            {% if f.group == 'outcome' %}
+            {% if not f.per_day %}<th scope="col" class="num">Share</th>{% endif %}
+            {% else %}
+            <th scope="col" class="num">Errors</th>
+            <th scope="col" class="num">Error rate</th>
+            <th scope="col" class="num">Refused</th>
+            {% endif %}
+            <th scope="col" class="num">Prompt tokens</th>
+            <th scope="col" class="num">Completion tokens</th>
+            <th scope="col" class="num">Avg duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in (daily_rows if f.per_day else rows) %}
+          <tr>
+            {% if f.per_day %}<td data-label="Day" class="nowrap">{{ row.day|day }}</td>{% endif %}
+            <td class="span">{{ group_cell(row) }}</td>
+            <td class="num" data-label="Requests">{{ row.cell.requests|num }}</td>
+            {% if not f.per_day %}<td class="meter-cell">{{ ui.meter(row.meter, 'c' ~ row.slot) }}</td>{% endif %}
+            {% if f.group == 'outcome' %}
+            {% if not f.per_day %}<td class="num" data-label="Share">{{ row.share|pct }}</td>{% endif %}
+            {% else %}
+            <td class="num" data-label="Errors">{{ row.cell.errors|num }}</td>
+            <td class="num" data-label="Error rate">{{ row.cell.error_rate|pct }}</td>
+            <td class="num" data-label="Refused">{{ row.cell.rejected|num if tokens_known else '–' }}</td>
+            {% endif %}
+            <td class="num" data-label="Prompt tokens">{{ row.cell.prompt_tokens|num if tokens_known else '–' }}</td>
+            <td class="num" data-label="Completion tokens">{{ row.cell.completion_tokens|num if tokens_known else '–' }}</td>
+            <td class="num" data-label="Avg duration">{{ row.cell.avg_ms|duration }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+        {% if not f.per_day %}
+        <tfoot>
+          <tr>
+            <td class="span">Total</td>
+            <td class="num" data-label="Requests">{{ total.requests|num }}</td>
+            <td></td>
+            {% if f.group == 'outcome' %}
+            <td class="num" data-label="Share">100.0%</td>
+            {% else %}
+            <td class="num" data-label="Errors">{{ total.errors|num }}</td>
+            <td class="num" data-label="Error rate">{{ total.error_rate|pct }}</td>
+            <td class="num" data-label="Refused">{{ total.rejected|num if tokens_known else '–' }}</td>
+            {% endif %}
+            <td class="num" data-label="Prompt tokens">{{ total.prompt_tokens|num if tokens_known else '–' }}</td>
+            <td class="num" data-label="Completion tokens">{{ total.completion_tokens|num if tokens_known else '–' }}</td>
+            <td class="num" data-label="Avg duration">{{ total.avg_ms|duration }}</td>
+          </tr>
+        </tfoot>
+        {% endif %}
+      </table>
+    </div>
+    {% if daily_hidden %}<p class="sheet-foot">Showing the newest {{ daily_rows|length }} rows. The CSV export has all {{ daily_rows|length + daily_hidden }}.</p>{% endif %}
+    {% if f.group != 'outcome' %}<p class="sheet-foot">Refused means the router answered without forwarding: rate limit, concurrency cap or model unavailable. These are not part of Requests.</p>{% endif %}
+  </section>
+  {% endif %}
+</div>
+{% endblock %}

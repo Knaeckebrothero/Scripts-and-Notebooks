@@ -42,7 +42,8 @@ EnvironmentFile=%h/.config/model-orchestrator/vpn.env
 
 # Resource limits — sidecar is tiny (~15MB image).
 Memory=256M
-CPUs=0.5
+# Quadlet has no CPUs key; an unknown key makes the generator drop the unit.
+PodmanArgs=--cpus=0.5
 
 [Service]
 Restart=on-failure

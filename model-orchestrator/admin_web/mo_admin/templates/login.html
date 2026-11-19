@@ -1,0 +1,48 @@
+{% extends "auth_base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Sign in{% endblock %}
+{% block card %}
+<div class="sheet">
+  <div class="sheet-body auth-body">
+    <div>
+      <h1>Sign in</h1>
+      <p class="muted">Keys, usage and route status for the model router.</p>
+    </div>
+
+    {% if error %}
+    {{ ui.flash('bad', error) }}
+    {% elif signed_out %}
+    {{ ui.flash('ok', 'You are signed out.') }}
+    {% endif %}
+
+    {% if oidc_enabled %}
+    <a class="btn btn-primary" href="{{ oidc_href }}">Continue with {{ settings.oidc_label }}</a>
+    {% endif %}
+
+    {% if oidc_enabled and local_enabled %}
+    <p class="auth-or">or use the local account</p>
+    {% endif %}
+
+    {% if local_enabled %}
+    <form method="post" action="/login" class="form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <div class="field">
+        <label for="username">User name</label>
+        <input class="input" id="username" name="username" type="text" value="{{ typed_user }}" autocomplete="username" autocapitalize="none" spellcheck="false" required{% if not oidc_enabled %} autofocus{% endif %}>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input class="input" id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="btn{% if not oidc_enabled %} btn-primary{% endif %}">Sign in</button>
+    </form>
+    {% endif %}
+
+    {% if not oidc_enabled and not local_enabled %}
+    {{ ui.flash('warn', 'No sign-in method is configured.') }}
+    <p class="muted">Set <code>ADMIN_OIDC_ISSUER</code>, <code>ADMIN_OIDC_CLIENT_ID</code> and <code>ADMIN_OIDC_REQUIRED_ROLE</code> for single sign-on, or <code>ADMIN_LOCAL_PASSWORD</code> for the local account, then restart the console.</p>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

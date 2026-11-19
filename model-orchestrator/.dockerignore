@@ -1,0 +1,22 @@
+# Build context for the images built from this directory. An allowlist:
+# everything is left out unless it is named below, so tests, the admin
+# frontends (admin_ui/, admin_web/), virtualenvs, caches, local env files and
+# the 2.x router (main.py, store.py) never reach a build.
+*
+
+# Dockerfile: the router image.
+!pyproject.toml
+!uv.lock
+!.python-version
+!model_orchestrator
+!migrations
+!config.example.yaml
+
+# demo/backends.Dockerfile: the fake backends of the local demo stack. The
+# router's Dockerfile copies none of this, so it is not in the router image.
+!scripts/demo_backends.py
+!tests/__init__.py
+!tests/fakes
+
+**/__pycache__
+**/*.pyc

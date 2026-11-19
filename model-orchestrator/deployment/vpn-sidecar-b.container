@@ -43,7 +43,8 @@ EnvironmentFile=%h/.config/model-orchestrator/vpn-b.env
 # Volume=%h/.config/model-orchestrator/ca-b.crt:/etc/vpn/certs/ca.crt:ro
 
 Memory=256M
-CPUs=0.5
+# Quadlet has no CPUs key; an unknown key makes the generator drop the unit.
+PodmanArgs=--cpus=0.5
 
 [Service]
 Restart=on-failure

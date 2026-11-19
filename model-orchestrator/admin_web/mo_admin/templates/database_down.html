@@ -1,0 +1,14 @@
+{% extends "auth_base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Database unreachable{% endblock %}
+{% block card_class %} wide{% endblock %}
+{% block card %}
+<div class="sheet">
+  <div class="sheet-body stack">
+    <h1>The database cannot be reached</h1>
+    <p>Postgres did not answer, so keys and usage cannot be shown and nothing was changed. The router keeps serving requests from the keys it already holds.</p>
+    <p class="muted">Check that the database is running and that <code>ADMIN_DATABASE_URL</code> points at it. The console reconnects on its own.</p>
+    <p class="head-actions"><a class="btn btn-primary" href="{{ current_url }}">Try again</a></p>
+  </div>
+</div>
+{% endblock %}

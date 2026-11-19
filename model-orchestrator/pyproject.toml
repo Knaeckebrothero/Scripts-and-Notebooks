@@ -1,0 +1,65 @@
+[project]
+name = "model-orchestrator"
+version = "3.0.0.dev0"
+description = "OpenAI-compatible model router: one door to every self-hosted model"
+readme = "README.md"
+requires-python = ">=3.13"
+# Runtime dependencies. The image installs exactly what uv.lock pins
+# (`uv sync --frozen --no-dev`), so run `uv lock` after changing this list.
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "httpx[http2,socks]>=0.26.0",
+    "pydantic>=2.5.0",
+    "pyyaml>=6.0.1",
+    "python-multipart>=0.0.6",
+    "psycopg[binary,pool]>=3.2",
+    "prometheus-client>=0.26.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+    "pytest-timeout>=2.3",
+    "aiohttp>=3.10",
+    "ruff>=0.8",
+    "mypy>=2.4.1",
+    "types-pyyaml>=6.0.12.20261113",
+]
+
+[tool.uv]
+# An application, not a library: it runs from this directory
+# (`python -m model_orchestrator`) and is never built or installed, so there is
+# no build system.
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+# Every test polls with its own deadlines; this is only the backstop against a hang.
+timeout = 90
+markers = [
+    "change(cid): asserts the NEW behaviour of intentional change C<n> (design section 6). Strict xfail on ROUTER_TARGET=legacy.",
+    "legacy_only: pins the behaviour in the 'Today' column of design section 6. Skipped on ROUTER_TARGET=new.",
+    "feature(name): section 7 behaviour with no change id. Skipped on ROUTER_TARGET=legacy.",
+]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+# main.py and store.py are the 2.x router, frozen as the reference the contract
+# suite compares against (ROUTER_TARGET=legacy). They go when it is retired.
+extend-exclude = ["admin_ui", "admin_web", "deployment", "main.py", "store.py"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tables of test data and literal wire bytes read better on one line.
+"tests/e2e/*" = ["E501"]
+"tests/fakes/*" = ["E501"]
+"tests/harness/*" = ["E501"]
+"tests/conftest.py" = ["E501"]

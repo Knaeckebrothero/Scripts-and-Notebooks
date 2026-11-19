@@ -6,9 +6,10 @@ metadata:
   labels:
     app.kubernetes.io/name: model-orchestrator
 spec:
-  # Pinned to 1: the rate limiter is in-memory, so >1 replica gives per-pod
-  # counters (effectively multiplying configured RPM by replica count).
-  # Revisit once a shared store lands (see roadmap.md).
+  # One replica, on purpose: the rate limiter, the concurrency counters and
+  # the health state live in the router's memory. A second replica would give
+  # every key twice its limits. For the same reason the old pod is stopped
+  # before the new one starts.
   replicas: 1
   strategy:
     type: Recreate
@@ -19,134 +20,111 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: model-orchestrator
+      annotations:
+        # For a Prometheus that discovers pods by annotation. The metrics port
+        # has no auth and shows backend URLs and key names: scrape it from
+        # inside the cluster, and never put it behind the Service or Ingress.
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9095"
+        prometheus.io/path: "/metrics"
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: router
-          image: ghcr.io/knaeckebrothero/model-orchestrator:latest
+          # Pin what you deploy: a release (vX.Y.Z) or a build of main
+          # (sha-<short>). `latest` only moves on a release tag, but a pinned
+          # tag is what makes a rollout a reviewed change.
+          image: ghcr.io/knaeckebrothero/model-orchestrator:v3.0.0
           imagePullPolicy: IfNotPresent
           env:
-            - name: ROUTER_PORT
-              value: "8090"
             - name: ROUTER_CONFIG
-              value: "/app/config.yaml"
-            # API keys + usage live in Postgres (required). Point this at a
-            # reachable instance; the router creates its own tables.
+              value: "/etc/model-orchestrator/config.yaml"
+            - name: ROUTER_LOG_FORMAT
+              value: "json"
+            # See terminationGracePeriodSeconds at the end of this file.
+            # - name: ROUTER_SHUTDOWN_GRACE_SECONDS
+            #   value: "50"
+            # Postgres 16 or 17. The router creates and migrates its tables.
             - name: ROUTER_DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: model-orchestrator-keys
                   key: database-url
+            # One entry per route that sets backend_api_key_env in the config:
+            # - name: TUNNEL_CHAT_API_KEY
+            #   valueFrom:
+            #     secretKeyRef:
+            #       name: model-orchestrator-keys
+            #       key: tunnel-chat-api-key
           ports:
             - name: http
               containerPort: 8090
               protocol: TCP
+            # Internal: Prometheus metrics and the detailed health view.
+            - name: metrics
+              containerPort: 9095
+              protocol: TCP
           volumeMounts:
+            # The whole ConfigMap as a directory, not one file with subPath: a
+            # subPath mount never sees an update, a directory mount does, and
+            # the router then reloads the config by itself.
             - name: config
-              mountPath: /app/config.yaml
-              subPath: config.yaml
+              mountPath: /etc/model-orchestrator
               readOnly: true
-          # /livez is the cheap process-up probe. /health walks every backend
-          # and pings Postgres — operator-facing, not for the kubelet (a
-          # slow backend would blow the probe budget and crashloop the pod).
+            # Uploads above 1 MB (speech-to-text) are spooled to /tmp.
+            - name: tmp
+              mountPath: /tmp
+          # /livez answers as long as the process runs. It touches neither the
+          # database nor a backend, so an outage elsewhere never restarts the
+          # router. /health is for people and dashboards, not for the kubelet.
+          # The start waits up to 60 s for Postgres, applies migrations and
+          # probes every backend once before the port opens.
+          startupProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
           livenessProbe:
             httpGet:
               path: /livez
               port: http
-            initialDelaySeconds: 10
             periodSeconds: 30
             timeoutSeconds: 5
           readinessProbe:
             httpGet:
               path: /livez
               port: http
-            initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 5
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               cpu: "100m"
               memory: "256Mi"
             limits:
               cpu: "2"
+              # Request bodies are held in memory (up to ROUTER_MAX_BODY_MB,
+              # default 200, per request).
               memory: "2Gi"
-
-        # VPN sidecar — remove this container (and the /dev/ppp volume) if
-        # you don't have any routes that set `proxy: socks5h://...`.
-        # Shares the pod's network namespace with the router, so the router
-        # dials socks5h://127.0.0.1:1080.
-        - name: vpn-sidecar
-          image: ghcr.io/knaeckebrothero/vpn-sidecar:latest
-          imagePullPolicy: IfNotPresent
-          envFrom:
-            - secretRef:
-                name: model-orchestrator-vpn
-          securityContext:
-            capabilities:
-              add: ["NET_ADMIN"]
-          volumeMounts:
-            - name: dev-ppp
-              mountPath: /dev/ppp
-          # Liveness probe catches stale tunnels that openfortivpn itself fails
-          # to notice. /healthz compares ppp0 tx/rx deltas between probes — if
-          # we sent bytes in and got nothing back, it returns 503 and the
-          # kubelet restarts the container. See devops/vpn-sidecar/healthcheck.sh.
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 8081
-            initialDelaySeconds: 30
-            periodSeconds: 20
-            timeoutSeconds: 5
-            failureThreshold: 3
-          resources:
-            requests:
-              cpu: "50m"
-              memory: "64Mi"
-            limits:
-              cpu: "500m"
-              memory: "256Mi"
-
-        # Second VPN sidecar — uncomment when you need backends from a
-        # distinct VPN network. Must listen on a different loopback port
-        # (set SOCKS_PORT=1081 inside model-orchestrator-vpn-b); routes
-        # then reference it via `proxy: socks5h://127.0.0.1:1081`.
-        #
-        # - name: vpn-sidecar-b
-        #   image: ghcr.io/knaeckebrothero/vpn-sidecar:latest
-        #   imagePullPolicy: IfNotPresent
-        #   envFrom:
-        #     - secretRef:
-        #         name: model-orchestrator-vpn-b
-        #   securityContext:
-        #     capabilities:
-        #       add: ["NET_ADMIN"]
-        #   volumeMounts:
-        #     - name: dev-ppp
-        #       mountPath: /dev/ppp
-        #   # Must use a distinct HEALTH_PORT (e.g. 8082) in model-orchestrator-vpn-b
-        #   # since both sidecars share the pod network namespace.
-        #   livenessProbe:
-        #     httpGet:
-        #       path: /healthz
-        #       port: 8082
-        #     initialDelaySeconds: 30
-        #     periodSeconds: 20
-        #     timeoutSeconds: 5
-        #     failureThreshold: 3
-        #   resources:
-        #     requests:
-        #       cpu: "50m"
-        #       memory: "64Mi"
-        #     limits:
-        #       cpu: "500m"
-        #       memory: "256Mi"
-
       volumes:
         - name: config
           configMap:
             name: model-orchestrator-config
-        - name: dev-ppp
-          hostPath:
-            path: /dev/ppp
-            type: CharDevice
-
+        - name: tmp
+          emptyDir: {}
+      # Has to be longer than ROUTER_SHUTDOWN_GRACE_SECONDS (default 8): on
+      # SIGTERM the router gives requests in flight that long and then ends
+      # them with an answer. To give long requests more time, raise both
+      # together, for example ROUTER_SHUTDOWN_GRACE_SECONDS=50 in `env` above
+      # and 60 here.
       terminationGracePeriodSeconds: 30

@@ -1,0 +1,131 @@
+{% extends "base.html" %}
+{% import "macros.html" as ui %}
+{% block title %}Keys{% endblock %}
+
+{% macro sort_head(code, label, numeric=false) -%}
+{% set is_current = sort == code %}
+{% set next_dir = ('desc' if direction == 'asc' else 'asc') if is_current else default_direction[code] %}
+<th scope="col"{% if numeric %} class="num"{% endif %}{% if is_current %} aria-sort="{{ 'ascending' if direction == 'asc' else 'descending' }}"{% endif %}>
+  {% set href = '/keys' ~ qs(state, sort=code, dir=(next_dir if next_dir != default_direction[code] else None)) %}
+  <a class="sort" id="sort-{{ code }}" href="{{ href }}" hx-get="{{ href }}">{{ label }}{{ ui.icon('arrow') }}</a>
+</th>
+{%- endmacro %}
+
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Keys</h1>
+    <p class="lede">Each key is a client's credential for the router, with its own limits and expiry.</p>
+  </div>
+  <div class="head-actions">
+    <a class="btn btn-primary" href="/keys/new">{{ ui.icon('plus') }}Create key</a>
+  </div>
+</div>
+
+<div id="keys-results" class="sheet dims" hx-target="#keys-results" hx-select="#keys-results" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#keys-results" hx-select-oob="#flash">
+  {% if total %}
+  <form class="toolbar" method="get" action="/keys" role="search"
+        hx-get="/keys" hx-trigger="input changed delay:250ms from:#key-search, search from:#key-search, change from:#key-sort, submit" hx-sync="this:replace">
+    <div class="search">
+      {{ ui.icon('search') }}
+      <label class="vh" for="key-search">Search keys</label>
+      <input class="input" id="key-search" type="search" name="q" value="{{ query }}" placeholder="Name, owner, email or prefix" autocomplete="off" spellcheck="false" hx-preserve="true">
+    </div>
+    {% if status != 'all' %}<input type="hidden" name="status" value="{{ status }}">{% endif %}
+    <div class="inline-field sort-select">
+      <label for="key-sort">Sort by</label>
+      <select class="select" id="key-sort" name="sort" data-autosubmit>
+        {% for code, label in sorts %}<option value="{{ code }}"{% if code == sort %} selected{% endif %}>{{ label }}</option>{% endfor %}
+      </select>
+    </div>
+    <noscript><button type="submit" class="btn">Search</button></noscript>
+    <span class="grow"></span>
+    <span class="note" aria-live="polite">{% if rows|length == total %}{{ total }} {{ 'key' if total == 1 else 'keys' }}{% else %}{{ rows|length }} of {{ total }} keys{% endif %}</span>
+  </form>
+  <div class="toolbar">
+    <div class="chips" role="group" aria-label="Filter by status">
+      {% for code, label in filters %}
+      {% set href = '/keys' ~ qs(state, status=(code if code != 'all' else None)) %}
+      <a class="chip" id="filter-{{ code }}" href="{{ href }}" hx-get="{{ href }}"{% if code == status %} aria-current="true"{% endif %}>{{ label }} <b>{{ counts[code] }}</b></a>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  {% if rows %}
+  <div class="scroll">
+    <table class="table cards">
+      <thead>
+        <tr>
+          {{ sort_head('name', 'Key') }}
+          {{ sort_head('owner', 'Owner') }}
+          {{ sort_head('status', 'Status') }}
+          {{ sort_head('limit', 'Limits') }}
+          <th scope="col">Routes</th>
+          {{ sort_head('expires', 'Expires') }}
+          {{ sort_head('last_used', 'Last used') }}
+          {{ sort_head('requests', 'Requests, 30 d', true) }}
+          {{ sort_head('tokens', 'Tokens, 30 d', true) }}
+          <th scope="col"><span class="vh">Actions</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for key in rows %}
+        <tr{% if key.status.code in ('disabled', 'expired') %} class="row-off"{% endif %}>
+          <td class="span key-cell">
+            <a class="cell-main" href="/keys/{{ key.id }}">{{ key.name }}</a>
+            <span class="cell-sub mono">{{ key.key_prefix }}…</span>
+          </td>
+          <td data-label="Owner" class="owner-cell">
+            <span class="clip" title="{{ key.owner }}">{{ key.owner }}</span>
+            {% if key.owner_email %}<span class="cell-sub clip" title="{{ key.owner_email }}">{{ key.owner_email }}</span>{% endif %}
+          </td>
+          <td data-label="Status">{{ ui.badge(key.status.tone, key.status.label, {'ok': 'check', 'warn': 'clock', 'bad': 'alert', 'idle': 'pause'}[key.status.tone]) }}</td>
+          <td data-label="Limits" class="nowrap">
+            {{ key.rate_limit_rpm|num }} per min
+            <span class="cell-sub">{% if key.max_concurrency is none %}no cap{% else %}{{ key.max_concurrency|num }} at once{% endif %}</span>
+          </td>
+          <td data-label="Routes" class="nowrap">
+            {% if key.allowed_models %}
+            <span title="{{ key.allowed_models|sort|join(', ') }}">{{ key.allowed_models|length }} {{ 'route' if key.allowed_models|length == 1 else 'routes' }}</span>
+            {% else %}All{% endif %}
+          </td>
+          <td data-label="Expires" class="nowrap">{{ ui.expiry(key, now) }}</td>
+          <td data-label="Last used" class="nowrap">
+            {% if key.last_used_at %}<time datetime="{{ key.last_used_at|iso }}" title="{{ key.last_used_at|clock }} UTC">{{ key.last_used_at|relative(now) }}</time>
+            {% elif key.never_used %}{{ ui.badge('idle', 'Never used') }}
+            {% else %}<span class="faint">Not recorded</span>{% endif %}
+          </td>
+          <td class="num" data-label="Requests, 30 d">{{ key.requests_30d|num }}</td>
+          <td class="num" data-label="Tokens, 30 d">{{ key.tokens_30d|compact }}</td>
+          <td class="tight span">
+            <div class="row-actions">
+              <form method="post" action="/keys/{{ key.id }}/enabled" hx-post="/keys/{{ key.id }}/enabled" hx-push-url="false">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="enabled" value="{{ '0' if key.enabled else '1' }}">
+                <input type="hidden" name="return_to" value="{{ current_url }}">
+                <button type="submit" class="btn btn-small" id="toggle-{{ key.id }}" aria-label="{{ 'Disable' if key.enabled else 'Enable' }} {{ key.name }}">{{ 'Disable' if key.enabled else 'Enable' }}</button>
+              </form>
+              <a class="btn btn-small" href="/keys/{{ key.id }}/edit" aria-label="Edit {{ key.name }}">Edit</a>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% elif total %}
+  <div class="empty">
+    <h2>No key matches</h2>
+    <p>{% if query %}Nothing matches “{{ query }}”{% if status != 'all' %} among the filtered keys{% endif %}.{% else %}No key has this status right now.{% endif %}</p>
+    <a class="btn" href="/keys" hx-get="/keys">Show all keys</a>
+  </div>
+  {% else %}
+  <div class="empty">
+    <h2>No keys yet</h2>
+    <p>The router rejects every request until a key exists. Create the first one, copy its secret and give it to the client that will call the router.</p>
+    <a class="btn btn-primary" href="/keys/new">{{ ui.icon('plus') }}Create key</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

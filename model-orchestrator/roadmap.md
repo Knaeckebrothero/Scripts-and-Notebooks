@@ -1,99 +1,143 @@
-# AI Model Router — Roadmap
+# Roadmap
 
-Living document for planned work on the router. Items near the top are concrete
-next steps; items further down are larger ideas that need more scoping before
-they become actionable.
+What is done, what happens next, and what is deliberately left for later. The design behind version 3 is
+`docs/superpowers/specs/2026-11-18-model-router-rework-design.md` in this repository; section numbers
+below refer to it. The admin website's decisions are in `docs/superpowers/specs/2026-11-19-admin-website-design.md`.
 
-## Current state (baseline, 2026-06-12)
+## Where things stand
 
-- FastAPI pass-through proxy (`main.py` + `store.py`): chat, completions,
-  embeddings, rerank, vision, STT, TTS.
-- YAML-driven routing (`routes:` mapping model names → backend URL + endpoint),
-  union'd with backend `/v1/models` auto-discovery; load-balanced backend
-  pools with health flagging + failover.
-- **Postgres-backed API keys** (hashed, per-key rpm limit, per-key model
-  allowlist, optional expiry) — YAML key/tier config is fully removed.
-  Daily usage aggregation (`usage_daily`) per key × route.
-- **Streamlit admin UI** (`admin_ui/`) for key CRUD + usage monitoring.
-- **nginx TLS termination** in front of router (public :8090) and UI
-  (public :8501); router/UI/Postgres are loopback-only.
-- Structured logging (request_id, owner, limit, model, backend), OpenAI-shaped
-  error envelopes.
-- Deployed via Podman Quadlet (`deployment/*.container`, `*.volume`); k8s
-  manifests mirror the layout (BYO Postgres). CI builds both images to GHCR.
+- **Version 3 of the router is complete in the repository and not yet released.** It is the package
+  `model_orchestrator/`, with unit tests, an end-to-end contract suite and a CI pipeline that gates
+  publishing. `pyproject.toml` says `3.0.0.dev0`.
+- **Production still runs 2.x** at both sites. Two kinds of site exist, and the plan below treats them
+  differently:
+  - *Site A*: one GPU host, rootless Podman with systemd units, updates itself from the `latest` tag.
+  - *Site B*: Kubernetes, image tags pinned in git. This is the pilot site.
+- **The admin website (`admin_web/`) is built and tested, and not yet deployed.** The Streamlit page
+  (`admin_ui/`) is what the sites use today.
+- **The 2.x router (`main.py`, `store.py`) is still in the repository**, only so that the contract suite
+  can run against it (`ROUTER_TARGET=legacy`). The image no longer contains it.
 
-## Near-term
+## Done in version 3
 
-### 1. Get the university TLS certs reissued
+| Area | What |
+|---|---|
+| Structure | A package of small modules with no state at import time; `uv.lock`; ruff, mypy (strict), unit tests, the contract suite on Postgres 16 and 17 |
+| CI and releases | Every image is tested before it is published. `latest` and `vX.Y.Z` move on a release tag only; `main` publishes `sha-<short>` |
+| Fixes clients can see | Real status codes for streaming errors; the backend's own status and message; 504 for timeouts; 502 for broken connections; rerank `top_n` and all speech-to-text form fields forwarded; the error envelope everywhere; cancelled backend calls when the client leaves (section 6, C1 to C22) |
+| Availability | Active health probes decide which models are listed and which requests get an immediate 503; `ROUTER_HEALTH_GATING=off` as the escape hatch |
+| Accounting | Token counts per key and model in `usage_hourly`, including streamed answers; outcomes per request; `usage_daily` unchanged |
+| Limits | Per-key concurrency cap next to the per-minute limit, and an optional default cap for keys without one |
+| Resilience | Probes and discovery on connections of their own; 503 `router_busy` instead of a queue when the backend connections run out; streaming clients that stop reading are dropped; a shutdown ends requests in flight with an answer |
+| Operations | Prometheus metrics and a detailed health view on an internal port; one log line per request; validated config with `check-config`; reload on file change and `SIGHUP`; database migrations applied at start |
+| Several sites | Upstream-router mode: one site uses another site's models through its router, with one key |
+| Around the code | README, example config, a local demo stack without a GPU (`docker-compose.yaml`), deployment files for Quadlet and Kubernetes, the live smoke script (`scripts/smoke.py`) |
+| Admin website | Keys, usage with tokens, route status, audit log; sign-in with OpenID Connect or a local account; sign-out that holds across restarts |
 
-Deployed 2026-06-12 and measured: `curl` accepts the chain (legacy CN
-fallback), but **no Python client can verify it** —
+## Next: the rollout
 
-- the leaf (`CN=10.18.2.105`) is an **X.509 v1** certificate — the
-  pre-extensions format, so it *cannot* carry a `subjectAltName` (typical
-  of `openssl x509 -req` without `-extfile`); OpenSSL never falls back to
-  CN for IP hosts → "IP address mismatch" on every Python;
-- the CA cert lacks a `keyUsage` extension, which Python ≥ 3.13 rejects
-  outright (`VERIFY_X509_STRICT` default).
+No step replaces a running router in one go, and no step needs both sites to change at the same time.
 
-Ask the cert issuer (jfink@fra-uas.de per the cert subject) for: leaf
-reissued with `subjectAltName = IP:10.18.2.105`, and the CA cert re-signed
-with `keyUsage = critical, keyCertSign, cRLSign` (same keypair keeps the
-existing trust imports valid). Until then Python users need
-`verify=False` or a custom SSL context.
+### 1. Pilot at site B, by `sha-` pin
 
-### 2. Prometheus + Grafana
+1. Merge to `main`. CI publishes `sha-<short>`; `latest` does not move, so site A is not touched.
+2. Run `check-config` from that image on site B's live config.
+3. Pin the `sha-` tag at site B.
+4. Run `scripts/smoke.py` against it. Compare `/health` with what is known to be running.
+5. Scrape the internal port and watch for a few days: `router_backend_up`, `router_requests_total` by
+   outcome, `router_usage_records_dropped_total`, `router_internal_errors_total`.
+6. Fix what turns up, pin the next `sha-` build, repeat.
 
-Observability beyond the admin UI's daily aggregates.
+Done when site B has run one build for several days without an error caused by the router and without
+health gating taking a working backend offline.
 
-- Add `prometheus_client` to `requirements.txt`.
-- Expose `/metrics` in Prometheus format (separate port or config-gated so
-  it isn't on the public listener by default).
-- Metrics to export:
-  - `router_requests_total{key_owner, model, backend, status}` — counter.
-  - `router_request_duration_seconds{model, backend}` — histogram.
-  - `router_rate_limit_rejects_total{key_owner}` — counter.
-  - `router_backend_errors_total{backend, kind}` — counter (timeout, 5xx,
-    connection).
-  - `router_backend_up{backend}` — gauge (from the load-balancer health
-    flags).
-- Ship a starter Grafana dashboard JSON under `deployment/grafana/` with
-  request rate, p95 latency per model, rate-limit reject rate, and backend
-  error rate panels.
+### 2. Release 3.0.0, which upgrades site A
 
-## Later
+Site A follows `latest`, so the release is its upgrade. Before the tag:
 
-- **Split `main.py`** into a small module layout if it keeps growing
-  (currently ~1.3k lines + `store.py`; revisit past ~1.5k).
-- **Shared rate-limit store** — the limiter is in-memory, so `replicas > 1`
-  multiplies budgets. Move the window to Postgres/Redis if horizontal
-  scaling ever becomes a requirement; until then pin one replica.
-- **Token-level usage accounting** — `usage_daily` counts requests, not
-  tokens. Parsing `usage` from response bodies is easy for non-streaming;
-  streaming only carries usage when the client opts into
-  `stream_options.include_usage`, and the proxy deliberately never modifies
-  payloads — needs a design pass.
-- **Go rewrite** — revisit only if Python starts being the bottleneck for
-  streaming / concurrency. Deferred for now; the async httpx client is
-  probably fine for our scale.
+- [ ] Site A's live config passes `check-config` with the release candidate image.
+- [ ] Every probed backend at site A reports healthy on the running router. A `health_path` that fails
+      today would take its model offline under version 3: fix the path, or set it to `null`.
+- [ ] Nothing at site A scrapes `GET /metrics` on the API port or parses the old `/health`.
+- [ ] Port 9095 is free on the host and not published.
+- [ ] Any change freeze at site A is over.
 
-## Done (kept for context)
+Then:
 
-- **2026-06-12: full stack live on the university server** under the
-  recreated `routerprod` account (the old UID-985 one was deleted first):
-  orchestrator-db on loopback :5433 (5432 belongs to fessi-postgres),
-  router loopback :8091, admin UI loopback :8502, nginx TLS on public
-  :8090/:8501 (firewall opened for 8501). llmprod's old router quadlet
-  retired to `~/quadlet-retired/`; YAML keys are dead, keys live in
-  Postgres only. Verified end-to-end over HTTPS: chat, embeddings,
-  TTS→STT roundtrip, 401s for old/no keys, usage_daily rows, plain-HTTP
-  → 400. Quadlet gotcha fixed along the way: `DriverOpts` is not a valid
-  `[Volume]` key (generator drops the unit) — use `VolumeName`.
-- VPN sidecar wiring (SOCKS5 + TCP-forward patterns, multi-tunnel support).
-- Kubernetes manifest set under `deployment/kubernetes/`.
-- Cleanup: structured logging, OpenAI error envelopes, handler docstrings.
-- Load balancing: multi-backend routes, round-robin, unhealthy flagging,
-  non-streaming failover.
-- Admin UI, per-key model ACLs, persistent key store — landed as the
-  Postgres + Streamlit stack (this iteration went straight to Postgres
-  instead of SQLite, and Streamlit instead of FastAPI+HTMX).
+1. Set `version = "3.0.0"` in `pyproject.toml` and run `uv lock` (the lockfile records the version).
+2. Tag `model-orchestrator-v3.0.0`. CI publishes `v3.0.0` and moves `latest`.
+3. Site A pulls it at its next auto-update, or by hand: `podman pull`, then restart the unit.
+4. Run `scripts/smoke.py` against site A.
+5. Afterwards, at leisure: copy the new Quadlet unit (health command on `/livez`), add health paths and
+   concurrency caps where they help. None of this is needed for the upgrade itself.
+
+If it goes wrong: pin the previous image in the unit and restart. The database needs no rollback,
+because the migrations only add; `test_the_old_router_still_runs_on_a_migrated_database` proves that 2.x
+runs on a database version 3 has migrated. If only health gating misbehaves, `ROUTER_HEALTH_GATING=off`
+is enough.
+
+### 3. Site B uses site A through an upstream entry
+
+Today site B keeps a copy of site A's route list, synced by hand. With both sites on version 3:
+
+1. Create a key for site B in site A's router.
+2. Replace the copied routes in site B's config with one `upstreams` entry.
+3. Check that key allowlists at site B still name the right routes: the route names now come from
+   site A's `x_router` and should be the same names as before.
+4. Run the smoke script against site B.
+
+### 4. Roll out the admin website
+
+1. Deploy `admin_web` next to the Streamlit page (`deployment/admin-web.container`, or
+   `deployment/kubernetes/admin-web.yaml`), first with the local account.
+2. Register it with the identity provider and switch on single sign-on.
+3. Point the public UI port at it (`UI_UPSTREAM` in the nginx unit).
+4. Retire `admin_ui/` (see the clean-up list).
+
+## Clean-up after the rollout
+
+Only once no site runs 2.x any more.
+
+- [ ] Delete `main.py` and `store.py`, and their entries in the ruff `extend-exclude` list in
+      `pyproject.toml`.
+- [ ] Remove the legacy test target: the `ROUTER_TARGET` switch in `tests/harness/router.py` and
+      `tests/conftest.py`, and the `legacy` column in `tests/README.md`.
+- [ ] Delete the tests marked `legacy_only`. They pin 2.x behaviour that version 3 changed on purpose.
+- [ ] Turn the `change(...)` and `feature(...)` markers into plain tests: without a second target they
+      no longer select anything.
+- [ ] `tests/e2e/test_upstream.py::test_old_router_as_upstream_has_no_x_router` starts `main.py` as the
+      upstream. Replace it with a small stub that lists models without `x_router`, or delete it when no
+      2.x router can be an upstream any more.
+- [ ] Keep `tests/harness/legacy_schema.sql` for as long as a database created by 2.x exists somewhere:
+      it is what proves that such a database is adopted in place.
+- [ ] Retire `admin_ui/`: the directory, `deployment/admin-ui.container` and `admin-ui.env.example`,
+      its image in `.github/workflows/model-orchestrator.yml`, and the mentions in the nginx files and
+      the README.
+- [ ] Drop "Upgrading from 2.x" from the README when nobody needs it.
+
+## Follow-ups
+
+Separate pieces of work, in no fixed order (section 12 of the design, plus what the build turned up).
+
+| Item | Why | Starting point |
+|---|---|---|
+| Scheduled synthetic check | Notice a broken model before a user does | `scripts/smoke.py --json`, run on a timer, result pushed to the monitoring |
+| Dashboard and alert rules | The metrics exist; nothing shows them yet | A Grafana dashboard and Prometheus rules under `deployment/` |
+| Dependency updates for workflow actions | Python packages and base images get weekly Dependabot pull requests (`.github/dependabot.yml`); the actions in the workflow are pinned and will age | Add the `github-actions` updater once no workflow in the repository moves an auto-updated `latest` on every push to `main`; until then an action bump in another workflow would roll a production image |
+| Database backups | Keys and usage history exist once | A deployment task at each site |
+| Health-gated start at site A | A bad image should roll back by itself | `podman auto-update` rolls back when the unit fails to become healthy; needs a start that reports health to systemd |
+| Model servers accept the router only | Today a client inside the network can bypass keys and limits | Firewall or bind addresses at each site |
+| Token budgets per key | Counting came first; limits can follow now that there are numbers | `usage_hourly` |
+| Admin API | The admin website talks to the database directly | An API in the router would let it run without database access |
+| Load-aware balancing | Round robin ignores how busy a backend is | Needs a load signal from the backends |
+| More than one replica | Limiter and health state are in memory | Needs a shared store; not needed at today's traffic |
+| A clear error for uploads without a writable `/tmp` | With a read-only root filesystem and no `/tmp`, an upload above 1 MB ends as a plain 500 | Catch it in the multipart handler, or check at start |
+
+## Not planned
+
+- **Translating between API dialects.** The router forwards. That is the point of it.
+- **New endpoints for their own sake.** `/v1/completions`, `/v1/responses` and image endpoints are added
+  when a backend and a user need them. It is one entry in the endpoint table plus tests.
+- **GPU scheduling, planned availability windows, model swapping.** Another tool's job.
+- **A rewrite in another language.** The load is small, and the contract suite makes the Python code safe
+  to change.
