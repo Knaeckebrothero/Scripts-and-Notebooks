@@ -1,0 +1,47 @@
+# vllm serve arguments, ONE ARGUMENT PER LINE (a flag and its value are two lines).
+# Install as /etc/deepseek-vllm/serve.args.
+# Step 0 = the vLLM recipe for dgx_station_gb300 / single_node_tp (https://recipes.vllm.ai, fetched 2026-11-20),
+# unchanged, plus model path, served name, host and port. Tuning steps change one thing at a time from here.
+/models/DeepSeek-V4.1-Flash
+--served-model-name
+deepseek-ai/DeepSeek-V4.1-Flash
+--host
+0.0.0.0
+--port
+8000
+--tokenizer-mode
+deepseek_v41
+--offload-backend
+uva
+--cpu-offload-gb
+60
+--cpu-offload-params
+routed_experts.w13_weight
+routed_experts.w2_weight
+--engram-config
+{"cpu_offload":true}
+--gpu-memory-utilization
+0.97
+--max-model-len
+1048576
+--max-num-batched-tokens
+8192
+--long-prefill-token-threshold
+6144
+--compilation-config
+{"cudagraph_capture_sizes":[1,2,4,6,8,12,16,18,24,32,40,48,64,96,128]}
+--tensor-parallel-size
+1
+--attention-config
+{"backend":"FLASHMLA_MEGA_ATTN_DSV41"}
+--kv-cache-dtype
+fp8_ds_mla
+--max-num-seqs
+24
+--tool-call-parser
+deepseek_v41
+--enable-auto-tool-choice
+--reasoning-parser
+deepseek_v41
+--mm-encoder-tp-mode
+data

@@ -1,0 +1,45 @@
+# deepseek-vllm.service: DeepSeek-V4.1-Flash on one DGX Station GB300, Docker under systemd.
+# Install as /etc/systemd/system/deepseek-vllm.service (rootful: the page-cache drop below needs root).
+#
+# Why Docker + a plain unit and not a Quadlet: the Station ships Docker with the NVIDIA Container Toolkit
+# (the vendor's supported GPU path). Docker's restart policy stays OFF; systemd owns restarts.
+# Host networking on purpose: ports published by Docker bypass the host firewall.
+
+[Unit]
+Description=DeepSeek-V4.1-Flash on vLLM (container deepseek-vllm)
+Requires=docker.service
+After=docker.service network-online.target
+RequiresMountsFor=/srv/models /srv/vllm
+# A failing start retries at most 3 times in 6 h instead of crash-looping (a first start can take 90 min).
+StartLimitIntervalSec=6h
+StartLimitBurst=3
+
+[Service]
+Type=exec
+EnvironmentFile=/etc/deepseek-vllm/unit.env
+ExecStartPre=-/usr/bin/docker rm -f deepseek-vllm
+# A persisted torch.compile cache is only valid for the image that wrote it, and a stale one fails silently.
+ExecStartPre=/opt/deepseek-vllm/tools/vllm-cache-guard.sh ${IMAGE} /srv/vllm/cache/vllm
+# Empty the page cache first, so cached files cannot sit in memory the GPU needs (matters in NUMA mode,
+# where the HBM is a NUMA node the kernel may fill with page cache).
+ExecStartPre=/bin/sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+ExecStart=/usr/bin/docker run --rm --name deepseek-vllm \
+  --gpus device=${GPU} \
+  --network host --ipc host \
+  --ulimit memlock=-1 --ulimit stack=67108864 \
+  --oom-score-adj 1000 \
+  --log-opt max-size=50m --log-opt max-file=4 \
+  --env-file /etc/deepseek-vllm/env \
+  -e IMAGE_REF=${IMAGE} \
+  -v /etc/deepseek-vllm:/etc/deepseek-vllm:ro \
+  -v /srv/models:/models:ro \
+  -v /srv/vllm/cache:/root/.cache \
+  -v /srv/vllm/triton:/root/.triton \
+  ${IMAGE}
+ExecStop=/usr/bin/docker stop --time 120 deepseek-vllm
+Restart=on-failure
+RestartSec=60
+TimeoutStopSec=180
+
+[Install]
+WantedBy=multi-user.target

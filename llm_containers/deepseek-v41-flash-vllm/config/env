@@ -1,0 +1,5 @@
+# Container environment (docker --env-file: KEY=VALUE, no quotes). Overrides the image defaults.
+# Install as /etc/deepseek-vllm/env.
+# The first start runs a 75-90 min FlashInfer autotune; 3 h so the ready-timeout cannot cut it off.
+VLLM_ENGINE_READY_TIMEOUT_S=10800
+VLLM_USE_RUST_FRONTEND=1
