@@ -1,0 +1,54 @@
+# deepseek-derpseek.service: DeepSeek-V4.1-Flash-1017 on the derpseek engine image, Docker under systemd.
+# Install as /etc/systemd/system/deepseek-derpseek.service. Settings: /etc/deepseek-derpseek/unit.env (this unit)
+# and /etc/deepseek-derpseek/engine.env (the container). Clients do not talk to this container: it sits on the
+# internal Docker network ds-isolated (no route out, not reachable from other machines) and
+# deepseek-forwarder.service is the only door to it.
+#
+# The unit counts as started only when the engine answers /health and is warmed up (ExecStartPost), which takes
+# about 6 minutes (about 12 on the first start of a new image). The stock server (deepseek-vllm.service) needs the
+# same GPU, so the two units exclude each other.
+
+[Unit]
+Description=DeepSeek-V4.1-Flash on the derpseek engine (container deepseek-derpseek, isolated network)
+Requires=docker.service
+After=docker.service network-online.target deepseek-vllm.service
+Conflicts=deepseek-vllm.service
+Wants=deepseek-derpseek-memguard.service
+RequiresMountsFor=/srv/models /srv/vllm
+# A failing start retries at most 3 times in 6 h instead of crash-looping.
+StartLimitIntervalSec=6h
+StartLimitBurst=3
+
+[Service]
+Type=exec
+EnvironmentFile=/etc/deepseek-derpseek/unit.env
+ExecStartPre=-/usr/bin/docker rm -f deepseek-derpseek
+ExecStartPre=/opt/deepseek-vllm/derpseek/ds-net.sh
+# Empty the page cache first, so cached files do not sit in memory the engine needs.
+ExecStartPre=/bin/sh -c 'sync; echo 3 > /proc/sys/vm/drop_caches'
+ExecStart=/usr/bin/docker run --rm --name deepseek-derpseek \
+  --device nvidia.com/gpu=${GPU} --ipc host \
+  --network ds-isolated --ip ${ENGINE_IP} \
+  --cap-add SYS_NICE --cap-add IPC_LOCK \
+  --ulimit memlock=-1 --ulimit stack=67108864 --ulimit core=0 \
+  --security-opt label=disable \
+  --log-opt max-size=50m --log-opt max-file=6 \
+  --env-file /etc/deepseek-derpseek/engine.env \
+  --env-file /run/deepseek-derpseek/override.env \
+  -e PORT=${ENGINE_PORT} \
+  -v ${MODEL}:/model:ro \
+  -v ${STATE}/vllm:/root/.cache/vllm -v ${STATE}/flashinfer:/root/.cache/flashinfer \
+  -v ${STATE}/jit/tilelang:/root/.tilelang -v ${STATE}/jit/triton:/root/.triton \
+  -v ${STATE}/jit/nv:/root/.nv -v ${STATE}/jit/dj:/root/.dj \
+  ${IMAGE}
+ExecStartPost=/opt/deepseek-vllm/derpseek/ds-ready.sh
+ExecStop=/usr/bin/docker stop --time 30 deepseek-derpseek
+TimeoutStartSec=90min
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=60
+# The engine's log goes to the journal through docker run; do not drop lines in its bursts.
+LogRateLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target

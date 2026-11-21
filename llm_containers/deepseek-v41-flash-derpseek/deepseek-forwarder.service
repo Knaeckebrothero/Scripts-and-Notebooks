@@ -1,0 +1,32 @@
+# deepseek-forwarder.service: the only door to the engine container (see forwarder.py).
+# Install as /etc/systemd/system/deepseek-forwarder.service. Settings: /etc/deepseek-derpseek/forwarder.env.
+# It runs without root, as a throwaway user, and can read almost nothing of the system.
+# The stock server binds the same port itself, so the two units exclude each other.
+
+[Unit]
+Description=Forwarder in front of the DeepSeek engine container
+After=network-online.target docker.service
+Conflicts=deepseek-vllm.service
+
+[Service]
+EnvironmentFile=/etc/deepseek-derpseek/forwarder.env
+ExecStart=/usr/bin/python3 -I /opt/deepseek-vllm/derpseek/forwarder.py
+Restart=always
+RestartSec=2
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryMax=6G
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

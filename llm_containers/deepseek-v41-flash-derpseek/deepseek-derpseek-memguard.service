@@ -1,0 +1,11 @@
+# Stops deepseek-derpseek.service if the host's memory runs out, so the engine cannot lock the machine up.
+# Started and stopped together with the engine unit.
+[Unit]
+Description=Memory guard for deepseek-derpseek.service
+PartOf=deepseek-derpseek.service
+# No After=: it must already watch while the engine loads the weights.
+
+[Service]
+ExecStart=/opt/deepseek-vllm/derpseek/ds-memguard.sh 6 deepseek-derpseek.service
+Restart=on-failure
+RestartSec=5
