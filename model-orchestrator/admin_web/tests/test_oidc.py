@@ -1,13 +1,15 @@
 """The OpenID Connect flow against the fake provider in ``fakes.py``."""
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from mo_admin.oidc import as_role_set, claim_at, pkce_challenge
+from mo_admin.config import ConfigError, Settings, load_settings
+from mo_admin.oidc import OIDCClient, OIDCError, as_role_set, claim_at, pkce_challenge
 
 from .fakes import FakeProvider, free_port
 from .helpers import audit_rows, post
@@ -238,3 +240,135 @@ def test_claim_helpers():
     assert claim_at(claims, "realm_access.missing") is None
     assert claim_at(claims, "scope.deeper") is None
     assert as_role_set(None) is None
+
+
+# ------------------------------------------------------ an internal address
+# The browser and the website do not always reach the provider at the same
+# address: behind a proxy whose certificate the website cannot verify, the
+# website talks to the provider directly (ADMIN_OIDC_INTERNAL_URL) while the
+# browser keeps using the public address.
+PUBLIC = "https://sso.example.test/realms/uni"
+
+
+@pytest.fixture()
+def internal(provider: FakeProvider) -> str:
+    """The provider states a public address that cannot be reached from the
+    tests. Returns the address it really listens on."""
+    listening = provider.issuer
+    provider.issuer = PUBLIC
+    return listening
+
+
+@pytest.fixture()
+def sso_internal(provider: FakeProvider, internal: str, make_client, db) -> TestClient:
+    return make_client(
+        local_login=False, oidc_issuer=PUBLIC, oidc_internal_url=internal,
+        oidc_client_id=provider.client_id, oidc_client_secret=provider.client_secret, oidc_required_role=ROLE,
+    )
+
+
+def browser_at(internal: str, authorization_url: str) -> str:
+    """A browser reaches the public address; the test reaches the fake where it listens."""
+    assert authorization_url.startswith(PUBLIC + "/authorize?"), "the browser is sent to the public address"
+    return at_provider(internal + authorization_url[len(PUBLIC):])
+
+
+def test_sign_in_when_the_website_reaches_the_provider_at_an_internal_address(
+    sso_internal: TestClient, provider: FakeProvider, internal: str
+):
+    response = sso_internal.get(browser_at(internal, begin(sso_internal)))
+    assert response.status_code == 303 and response.headers["location"] == "/"
+    assert "Mira Castellan" in sso_internal.get("/").text
+    assert provider.seen == ["discovery", "jwks"] and len(provider.token_requests) == 1
+
+
+def test_userinfo_is_asked_at_the_internal_address(sso_internal: TestClient, provider: FakeProvider, internal: str):
+    provider.roles_in = "userinfo"
+    assert sso_internal.get(browser_at(internal, begin(sso_internal))).status_code == 303
+    assert sso_internal.get("/").status_code == 200
+
+
+def test_sign_out_sends_the_browser_to_the_public_address(
+    sso_internal: TestClient, provider: FakeProvider, internal: str
+):
+    sso_internal.get(browser_at(internal, begin(sso_internal)))
+    response = post(sso_internal, "/logout")
+    assert response.status_code == 303 and response.headers["location"].startswith(PUBLIC + "/logout?")
+    policy = sso_internal.get("/login").headers["content-security-policy"]
+    assert "https://sso.example.test" in policy and internal not in policy
+
+
+def test_tokens_must_still_name_the_public_issuer(sso_internal: TestClient, provider: FakeProvider, internal: str):
+    provider.fault = "wrong_issuer"
+    response = sso_internal.get(browser_at(internal, begin(sso_internal)))
+    assert response.status_code == 400 and "could not be verified" in response.text
+
+
+def test_the_internal_address_must_serve_the_configured_issuer(provider: FakeProvider, internal: str, make_client, db):
+    client = make_client(
+        local_login=False, oidc_issuer="https://sso.example.test/realms/another", oidc_internal_url=internal,
+        oidc_client_id=provider.client_id, oidc_required_role=ROLE,
+    )
+    response = client.get("/auth/oidc/start")
+    assert response.status_code == 502 and "misconfigured" in response.text
+
+
+@pytest.mark.parametrize(
+    "token_endpoint",
+    ["https://tokens.example.test/token", PUBLIC + "-other/protocol/token"],
+    ids=["another host", "a longer realm name"],
+)
+def test_only_addresses_under_the_issuer_go_to_the_internal_address(token_endpoint: str):
+    """An endpoint the provider keeps somewhere else is used as stated."""
+    asked: list[str] = []
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        if request.url.path.endswith("/.well-known/openid-configuration"):
+            return httpx.Response(200, json={
+                "issuer": PUBLIC, "authorization_endpoint": PUBLIC + "/auth",
+                "token_endpoint": token_endpoint, "jwks_uri": PUBLIC + "/certs",
+            })
+        return httpx.Response(400, json={"error": "invalid_grant"})
+
+    settings = Settings(
+        database_url="postgresql://unused", oidc_issuer=PUBLIC, oidc_internal_url="http://127.0.0.1:8601/realms/uni",
+        oidc_client_id="mo-admin", oidc_required_role=ROLE,
+    )
+
+    async def redeem() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(answer)) as http:
+            client = OIDCClient(settings, http)
+            await client.redeem("a-code", client.new_transaction("/"), "https://admin.example.test/auth/oidc/callback")
+
+    with pytest.raises(OIDCError):
+        asyncio.run(redeem())
+    assert asked == ["http://127.0.0.1:8601/realms/uni/.well-known/openid-configuration", token_endpoint]
+
+
+OIDC_ENV = {
+    "ADMIN_DATABASE_URL": "postgresql://u:p@localhost/db",
+    "ADMIN_SESSION_SECRET": "s" * 40,
+    "ADMIN_OIDC_ISSUER": PUBLIC,
+    "ADMIN_OIDC_CLIENT_ID": "mo-admin",
+    "ADMIN_OIDC_REQUIRED_ROLE": ROLE,
+}
+
+
+def test_the_internal_address_is_read_from_the_environment():
+    assert load_settings(OIDC_ENV).oidc_internal_url is None
+    settings = load_settings({**OIDC_ENV, "ADMIN_OIDC_INTERNAL_URL": "http://127.0.0.1:8601/realms/uni/"})
+    assert settings.oidc_internal_url == "http://127.0.0.1:8601/realms/uni"
+    assert settings.oidc_issuer == PUBLIC
+
+
+def test_the_internal_address_needs_an_issuer():
+    env = {k: v for k, v in OIDC_ENV.items() if not k.startswith("ADMIN_OIDC_")}
+    with pytest.raises(ConfigError, match="ADMIN_OIDC_ISSUER"):
+        load_settings({**env, "ADMIN_OIDC_INTERNAL_URL": "http://127.0.0.1:8601/realms/uni"})
+
+
+def test_the_internal_address_is_plain_http_on_this_machine_only():
+    with pytest.raises(ConfigError, match="ADMIN_OIDC_INTERNAL_URL must use https"):
+        load_settings({**OIDC_ENV, "ADMIN_OIDC_INTERNAL_URL": "http://keycloak.internal:8080/realms/uni"})
+    assert load_settings({**OIDC_ENV, "ADMIN_OIDC_INTERNAL_URL": "https://keycloak.internal/realms/uni"}).oidc_internal_url
