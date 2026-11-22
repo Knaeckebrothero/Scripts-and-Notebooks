@@ -1,7 +1,7 @@
 # Model router rework: core design
 
 **Date:** 2026-11-18
-**Status:** implemented on 2026-11-19 (section 13 lists where the code went beyond this text) and merged to `main` the same day. Not released. Rollout (section 10): the pilot site runs it since 2026-11-19; the other site still runs 2.x.
+**Status:** implemented on 2026-11-19 (section 13 lists where the code went beyond this text) and merged to `main` the same day. Released as `3.0.0` on 2026-11-22 (tag `model-orchestrator-v3.0.0`). Rollout (section 10): the pilot site runs version 3 since 2026-11-19, the other site since the release.
 **Scope:** the router service in `model-orchestrator/`: proxying, keys, limits, usage, health, metrics, tests and CI. The new admin website with Keycloak login was meant to be a separate project after this one; it was built on the same branch, and its decisions are recorded in [2026-11-19-admin-website-design.md](2026-11-19-admin-website-design.md).
 
 Site-specific facts (hosts, ports, accounts, tunnel details, rollout commands) are deliberately not in this file, because this repository is public. They live in the private infra notes in `docs_uni_infra/` (not in git): `05-model-router.md`, `07-homelab-integration.md` and `15-router-rework.md`.

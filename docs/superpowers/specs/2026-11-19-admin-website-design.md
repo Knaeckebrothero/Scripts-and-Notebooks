@@ -1,7 +1,7 @@
 # Model router admin website: design record
 
 **Date:** 2026-11-19
-**Status:** written after the build, as a record of the decisions. Built and tested next to router version 3 and merged to `main` on 2026-11-19. Not released; running at the pilot site with single sign-on since 2026-11-19. The core design ([2026-11-18-model-router-rework-design.md](2026-11-18-model-router-rework-design.md)) left this as a separate project; it was built in the same session under a general go-ahead to rework the UI, so the choices below were made by the builder, not agreed beforehand.
+**Status:** written after the build, as a record of the decisions. Built and tested next to router version 3 and merged to `main` on 2026-11-19. Released as `0.1.0` on 2026-11-22 (tag `model-orchestrator-admin-web-v0.1.0`); running with single sign-on at the pilot site since 2026-11-19 and at the second site since 2026-11-22. The core design ([2026-11-18-model-router-rework-design.md](2026-11-18-model-router-rework-design.md)) left this as a separate project; it was built in the same session under a general go-ahead to rework the UI, so the choices below were made by the builder, not agreed beforehand.
 **Scope:** `model-orchestrator/admin_web/`, the web console that replaces the Streamlit page in `model-orchestrator/admin_ui/`. How to run, configure and deploy it is in [`admin_web/README.md`](../../../model-orchestrator/admin_web/README.md); this file records why it looks the way it does.
 
 ---
@@ -70,7 +70,7 @@ The Streamlit page manages keys for both router sites. It has one shared usernam
 ## 7. Not verified, and left open
 
 - ~~Sign-in against a real Keycloak~~: verified 2026-11-19 at the pilot site (a confidential client with PKCE S256, the required role as a realm role read from `realm_access.roles`, no extra mapper).
-- ~~A Keycloak next to the router on a host with a certificate programs cannot verify~~: tried 2026-11-22 on a local rig (Keycloak 26.2.5 with the settings of `deployment/keycloak.container`, nginx with `nginx/keycloak.conf.template` and a certificate without a subjectAltName). Without the internal address the sign-in fails at discovery with a certificate error; with it the whole flow works in a browser, an account without the role gets the 403 page, and Keycloak's administration console works through nginx for the allowed addresses. Not yet done at a real site.
-- Who may sign in beyond administrators. For the second site, one Keycloak shared with other services there is planned.
+- ~~A Keycloak next to the router on a host with a certificate programs cannot verify~~: tried 2026-11-22 on a local rig (Keycloak 26.2.5 with the settings of `deployment/keycloak.container`, nginx with `nginx/keycloak.conf.template` and a certificate without a subjectAltName). Without the internal address the sign-in fails at discovery with a certificate error; with it the whole flow works in a browser, an account without the role gets the 403 page, and Keycloak's administration console works through nginx for the allowed addresses. Done at the second site on 2026-11-22 with the same files. One thing the rig did not show: on a host with much memory and no container memory limit, the Keycloak image starts with half of the host's memory as Java heap, so the unit now sets a fixed heap.
+- Who may sign in beyond administrators. The second site's Keycloak is meant to serve other services there as well; that is not done.
 - Several workers: the login brakes and the duplicate-submission guard are in memory, so the website runs as one process.
 - Retiring the Streamlit page: steps are in `roadmap.md`.
