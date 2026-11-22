@@ -95,6 +95,9 @@ class OIDCClient:
         # exact match between the document and the tokens).
         self.issuer = settings.oidc_issuer.rstrip("/")
         self.token_issuer = self.issuer
+        # Where this process reaches the provider, when that is not the
+        # address browsers use (ADMIN_OIDC_INTERNAL_URL).
+        self._internal = settings.oidc_internal_url.rstrip("/") if settings.oidc_internal_url else None
         self.client_id = settings.oidc_client_id
         self.client_secret = settings.oidc_client_secret
         self.scopes = settings.oidc_scopes
@@ -106,12 +109,21 @@ class OIDCClient:
         self._keys: dict[str | None, PyJWK] = {}
         self._keys_at = 0.0
 
+    def _reach(self, url: str) -> str:
+        """The address for a request of our own. Anything under the issuer goes
+        to the internal address when one is set; an endpoint the provider keeps
+        elsewhere is used as stated. Addresses handed to the browser (sign-in
+        and sign-out) never pass through here."""
+        if self._internal and (url == self.issuer or url.startswith(self.issuer + "/")):
+            return self._internal + url[len(self.issuer):]
+        return url
+
     # -- provider documents -------------------------------------------------
     async def metadata(self) -> dict[str, Any]:
         now = time.monotonic()
         if self._metadata is not None and now - self._metadata_at < METADATA_TTL:
             return self._metadata
-        url = f"{self.issuer}/.well-known/openid-configuration"
+        url = self._reach(f"{self.issuer}/.well-known/openid-configuration")
         try:
             response = await self._http.get(url)
             response.raise_for_status()
@@ -139,7 +151,7 @@ class OIDCClient:
     async def _load_keys(self) -> None:
         meta = await self.metadata()
         try:
-            response = await self._http.get(meta["jwks_uri"])
+            response = await self._http.get(self._reach(meta["jwks_uri"]))
             response.raise_for_status()
             jwks = response.json()
         except (httpx.HTTPError, ValueError) as exc:
@@ -233,7 +245,7 @@ class OIDCClient:
             kwargs: dict[str, Any] = {"data": form, "headers": {"Accept": "application/json"}}
             if auth is not None:
                 kwargs["auth"] = auth
-            response = await self._http.post(meta["token_endpoint"], **kwargs)
+            response = await self._http.post(self._reach(meta["token_endpoint"]), **kwargs)
         except httpx.HTTPError as exc:
             raise OIDCError(
                 "The identity provider cannot be reached right now.",
@@ -325,7 +337,9 @@ class OIDCClient:
         endpoint = meta.get("userinfo_endpoint")
         if endpoint and isinstance(access_token, str):
             try:
-                response = await self._http.get(endpoint, headers={"Authorization": f"Bearer {access_token}"})
+                response = await self._http.get(
+                    self._reach(endpoint), headers={"Authorization": f"Bearer {access_token}"}
+                )
                 response.raise_for_status()
                 info = response.json()
             except (httpx.HTTPError, ValueError) as exc:

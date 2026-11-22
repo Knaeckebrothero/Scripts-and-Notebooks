@@ -1,6 +1,6 @@
 [project]
 name = "model-orchestrator"
-version = "3.0.0.dev0"
+version = "3.0.0"
 description = "OpenAI-compatible model router: one door to every self-hosted model"
 readme = "README.md"
 requires-python = ">=3.13"

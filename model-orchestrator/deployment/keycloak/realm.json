@@ -1,0 +1,39 @@
+{
+  "realm": "${SSO_REALM}",
+  "enabled": true,
+  "sslRequired": "external",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "loginWithEmailAllowed": true,
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "router-admin",
+        "description": "May sign in to the model router's admin website"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "model-orchestrator-admin",
+      "name": "Model router admin website",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": false,
+      "redirectUris": ["${ROUTER_ADMIN_URL}/auth/oidc/callback"],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "${ROUTER_ADMIN_URL}/login*"
+      }
+    }
+  ]
+}

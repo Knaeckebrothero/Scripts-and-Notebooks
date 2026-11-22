@@ -3,6 +3,7 @@
 #   :8090 https  ->  ROUTER_UPSTREAM  the router (ROUTER_HOST=127.0.0.1, port 8091)
 #   :8501 https  ->  UI_UPSTREAM      the admin website (port 8600), or the old
 #                                     Streamlit UI (port 8502) until it is retired
+#   optional     ->  KEYCLOAK_UPSTREAM  Keycloak (port 8601), see below
 #
 # The router's internal port (9095) is not proxied, on purpose.
 #
@@ -28,6 +29,15 @@ Environment=ROUTER_UPSTREAM=http://127.0.0.1:8091
 # The admin website (admin-web.container). For the Streamlit UI
 # (admin-ui.container) use http://127.0.0.1:8502 instead.
 Environment=UI_UPSTREAM=http://127.0.0.1:8600
+
+# Optional: Keycloak on its own https port (keycloak.container). Uncomment
+# all four lines. KEYCLOAK_ADMIN_FROM names who may reach Keycloak's
+# administration console: a network such as 192.0.2.0/24, one address, or
+# `all`. nginx does not start while one of the three variables is missing.
+#Volume=%h/.config/model-orchestrator/nginx/keycloak.conf.template:/etc/nginx/templates/keycloak.conf.template:ro,z
+#Environment=KEYCLOAK_LISTEN=8443
+#Environment=KEYCLOAK_UPSTREAM=http://127.0.0.1:8601
+#Environment=KEYCLOAK_ADMIN_FROM=192.0.2.0/24
 
 # busybox wget. The certificate does not name 127.0.0.1, hence
 # --no-check-certificate: this only checks that TLS termination and the

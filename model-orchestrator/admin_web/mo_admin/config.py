@@ -80,6 +80,7 @@ class Settings:
     login_lockout_seconds: int = 60
 
     oidc_issuer: str | None = None
+    oidc_internal_url: str | None = None
     oidc_client_id: str | None = None
     oidc_client_secret: str | None = None
     oidc_required_role: str | None = None
@@ -121,7 +122,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     client_id = env.get("ADMIN_OIDC_CLIENT_ID", "").strip() or None
     client_secret = env.get("ADMIN_OIDC_CLIENT_SECRET", "").strip() or None
     required_role = env.get("ADMIN_OIDC_REQUIRED_ROLE", "").strip() or None
-    if issuer or client_id or client_secret or required_role:
+    internal_url = _url(env, "ADMIN_OIDC_INTERNAL_URL")
+    if issuer or client_id or client_secret or required_role or internal_url:
         if not issuer:
             raise ConfigError("ADMIN_OIDC_ISSUER is required when any ADMIN_OIDC_* variable is set")
         if not client_id:
@@ -134,6 +136,13 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         parts = urlsplit(issuer)
         if parts.scheme != "https" and parts.hostname not in _LOOPBACK:
             raise ConfigError("ADMIN_OIDC_ISSUER must use https (plain http is accepted for localhost only)")
+        # The client secret and the sign-in codes travel to this address.
+        if internal_url:
+            parts = urlsplit(internal_url)
+            if parts.scheme != "https" and parts.hostname not in _LOOPBACK:
+                raise ConfigError(
+                    "ADMIN_OIDC_INTERNAL_URL must use https (plain http is accepted for localhost only)"
+                )
 
     role_claim = env.get("ADMIN_OIDC_ROLE_CLAIM", "").strip() or "realm_access.roles"
 
@@ -163,6 +172,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         login_max_attempts=_int(env, "ADMIN_LOGIN_MAX_ATTEMPTS", 5, 1, 100),
         login_lockout_seconds=_int(env, "ADMIN_LOGIN_LOCKOUT_SECONDS", 60, 1, 3600),
         oidc_issuer=issuer,
+        oidc_internal_url=internal_url,
         oidc_client_id=client_id,
         oidc_client_secret=client_secret,
         oidc_required_role=required_role,

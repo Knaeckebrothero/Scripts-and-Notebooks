@@ -60,6 +60,7 @@ the start with a message that names the variable.
 | `ADMIN_SESSION_HOURS` / `ADMIN_SESSION_IDLE_MINUTES` | 8 / 60 | Absolute (at most 72) and idle session lifetime |
 | `ADMIN_OIDC_ISSUER`, `ADMIN_OIDC_CLIENT_ID`, `ADMIN_OIDC_CLIENT_SECRET` | unset | OpenID provider; the issuer switches single sign-on on |
 | `ADMIN_OIDC_REQUIRED_ROLE` | required with OIDC | Role an account needs |
+| `ADMIN_OIDC_INTERNAL_URL` | unset | The issuer as the console itself reaches it, when that is not the address browsers use |
 | `ADMIN_OIDC_ROLE_CLAIM` | `realm_access.roles` | Dotted path to the roles in the token |
 | `ADMIN_LOCAL_USER` / `ADMIN_LOCAL_PASSWORD` | `admin` / unset | Local account; active once a password is set. Fewer than 12 characters stops the start |
 | `ADMIN_LOCAL_LOGIN` | `on` | `off` removes the local account entirely |
@@ -100,6 +101,12 @@ Things to know:
   asks the user to confirm before it ends its own session. The console's session is over either way.
 - The issuer may be written with or without a trailing slash. Tokens must carry exactly the issuer the
   provider's discovery document states.
+- `ADMIN_OIDC_INTERNAL_URL` is for a provider the console reaches at another address than browsers do,
+  for example Keycloak on the same host behind a TLS proxy whose certificate the console cannot verify
+  (`ADMIN_OIDC_INTERNAL_URL=http://127.0.0.1:8601/realms/<realm>`). The console's own requests
+  (discovery, keys, token, userinfo) to addresses under the issuer go there instead; an endpoint the
+  provider keeps elsewhere is used as stated. Browsers are still sent to the issuer, and the discovery
+  document and the tokens must still name the issuer. Plain http is accepted for localhost only.
 - A refused sign-in (role missing) is written to the audit log once per account per ten minutes, however
   often it is repeated.
 
