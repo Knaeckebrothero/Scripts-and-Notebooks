@@ -799,6 +799,8 @@ Things to know:
   made in the console from then on. `${...}` in the file is filled in from `keycloak.env`.
 - **No unattended updates.** The unit pins Keycloak's minor version and has no `AutoUpdate`. For patch
   releases pull the tag and restart the unit. Back up the `keycloak` database with the router's.
+- **Memory.** The unit gives Keycloak a fixed Java heap of at most 1 GB (`JAVA_OPTS_KC_HEAP`). Without
+  it, and without a memory limit on the container, the image sizes the heap from the host's memory.
 
 ### Kubernetes
 

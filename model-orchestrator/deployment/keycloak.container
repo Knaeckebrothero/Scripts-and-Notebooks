@@ -45,6 +45,10 @@ Environment=KC_HTTP_PORT=8601
 Environment=KC_PROXY_HEADERS=xforwarded
 # One instance: no cluster, so no cluster ports are opened.
 Environment=KC_CACHE=local
+# Without a memory limit on the container, Keycloak sizes its Java heap from
+# the memory of the host: half of it to start with, up to 70 %. On a large
+# shared host that is far too much. A small installation needs about 1 GB.
+Environment="JAVA_OPTS_KC_HEAP=-Xms256m -Xmx1024m"
 Environment=KC_DB=postgres
 
 Volume=%h/.config/model-orchestrator/keycloak/import:/opt/keycloak/data/import:ro,z
