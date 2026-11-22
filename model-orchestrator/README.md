@@ -695,6 +695,7 @@ Rootless Podman with systemd units, everything on loopback behind nginx.
 | `admin-web.container`, `admin-web.env.example` | The admin website on `127.0.0.1:8600` |
 | `nginx.container`, `nginx/orchestrator.conf.template` | TLS on the public ports: 8090 for the API, 8501 for the admin UI |
 | `admin-ui.container`, `admin-ui.env.example` | The old Streamlit UI on `127.0.0.1:8502`, until it is retired |
+| `keycloak.container`, `keycloak.env.example`, `keycloak/realm.json`, `nginx/keycloak.conf.template` | Optional: Keycloak on `127.0.0.1:8601` for signing in to the admin website, see below |
 | `vpn-sidecar.container`, `vpn-sidecar-b.container` | Optional SOCKS proxies for routes that set `proxy:` |
 
 ```bash
@@ -735,6 +736,69 @@ write `:vX.Y.Z` or `:sha-<short>` in the unit. `systemctl restart` alone never p
 
 Every unit has its own `HealthCmd` and does not rely on the image's `HEALTHCHECK`: an image built with
 Podman has none, because the OCI image format has no place for it.
+
+#### Keycloak next to the router
+
+For a site that has no identity provider to sign in to the admin website with. Keycloak runs as one
+more unit on loopback, keeps its data in a second database of the router's Postgres, and gets its own
+https port on the same nginx. The realm file creates a realm with registration off, the website's
+client and the role `router-admin`; you create the accounts.
+
+```bash
+mkdir -p ~/.config/model-orchestrator/keycloak/import
+
+# 1. A role and a database for Keycloak, once. Use the password you put in keycloak.env.
+podman exec -it orchestrator-db psql -U orchestrator -d orchestrator \
+  -c "CREATE ROLE keycloak LOGIN PASSWORD 'change-me'" -c "CREATE DATABASE keycloak OWNER keycloak"
+
+# 2. Settings, the realm file and the nginx part.
+install -m 600 deployment/keycloak.env.example ~/.config/model-orchestrator/keycloak.env
+$EDITOR ~/.config/model-orchestrator/keycloak.env        # public address, passwords, realm name
+cp deployment/keycloak/realm.json ~/.config/model-orchestrator/keycloak/import/
+cp deployment/nginx/keycloak.conf.template ~/.config/model-orchestrator/nginx/
+$EDITOR ~/.config/containers/systemd/nginx.container     # uncomment the four Keycloak lines
+
+# 3. Start it. The first start takes about a minute.
+cp deployment/keycloak.container ~/.config/containers/systemd/
+systemctl --user daemon-reload
+systemctl --user start keycloak && systemctl --user restart nginx
+
+# 4. The client secret for admin-web.env, and a first account with the role.
+kc() { podman exec -it orchestrator-keycloak /opt/keycloak/bin/kcadm.sh "$@"; }
+kc config credentials --server http://127.0.0.1:8601 --realm master --user bootstrap-admin
+id=$(kc get clients -r <realm> -q clientId=model-orchestrator-admin --fields id --format csv --noquotes)
+kc get clients/$id/client-secret -r <realm> --fields value
+kc create users -r <realm> -s username=<name> -s enabled=true -s email=<address>
+kc set-password -r <realm> --username <name> --temporary
+kc add-roles -r <realm> --uusername <name> --rolename router-admin
+```
+
+Then set these in `admin-web.env` and restart `admin-web`:
+
+```
+ADMIN_OIDC_ISSUER=https://<public address>:<port>/realms/<realm>
+ADMIN_OIDC_INTERNAL_URL=http://127.0.0.1:8601/realms/<realm>
+ADMIN_OIDC_CLIENT_ID=model-orchestrator-admin
+ADMIN_OIDC_CLIENT_SECRET=<from step 4>
+ADMIN_OIDC_REQUIRED_ROLE=router-admin
+```
+
+Things to know:
+
+- **The internal address** lets the website fetch Keycloak's settings, keys and tokens over loopback.
+  Browsers use the public address. The website therefore does not have to be able to verify the public
+  certificate, which matters where the certificate is one that browsers accept after a warning but
+  programs reject (self-signed, or without a subjectAltName).
+- **The administration console** is at `https://<public address>:<port>/admin/`. nginx lets only the
+  addresses in `KEYCLOAK_ADMIN_FROM` reach it and the `master` realm; everyone else gets a 403 there and
+  can still sign in to the other realms. The steps of point 4 can also be done in the console.
+- **The first administrator** comes from `KC_BOOTSTRAP_ADMIN_*` and is meant to be temporary: create
+  your own account in the realm `master`, give it the role `admin`, delete the bootstrap account and
+  remove the two lines from `keycloak.env`.
+- **The realm file is read once.** When the realm exists, later starts leave it alone, so changes are
+  made in the console from then on. `${...}` in the file is filled in from `keycloak.env`.
+- **No unattended updates.** The unit pins Keycloak's minor version and has no `AutoUpdate`. For patch
+  releases pull the tag and restart the unit. Back up the `keycloak` database with the router's.
 
 ### Kubernetes
 

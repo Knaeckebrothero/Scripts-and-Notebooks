@@ -1,0 +1,70 @@
+# keycloak.container: Keycloak for signing in to the admin website (optional)
+#
+# For a site without an identity provider of its own. Listens on
+# 127.0.0.1:8601 in plain HTTP; nginx.container terminates TLS on the public
+# port (nginx/keycloak.conf.template): sign-in pages for everyone, the
+# administration console for the addresses named there.
+#
+# The admin website on the same host talks to it directly, so the public
+# certificate does not have to be one the website can verify:
+#   ADMIN_OIDC_ISSUER=https://<public address>:<port>/realms/<realm>
+#   ADMIN_OIDC_INTERNAL_URL=http://127.0.0.1:8601/realms/<realm>
+#
+# Data: its own database in the router's Postgres (orchestrator-db.container).
+# Create the role and the database once before the first start, see the
+# README ("Keycloak next to the router").
+#
+# Expects on the host:
+#   ~/.config/model-orchestrator/keycloak.env             (chmod 600, from keycloak.env.example)
+#   ~/.config/model-orchestrator/keycloak/import/*.json   (from deployment/keycloak/, read at start)
+[Unit]
+Description=Keycloak (sign-in for the model-orchestrator admin website)
+After=network-online.target orchestrator-db.service
+Wants=network-online.target
+
+[Container]
+ContainerName=orchestrator-keycloak
+# The minor version is pinned on purpose: a new minor migrates the database
+# and can change settings. Patch releases: `podman pull` this tag, then
+# restart the unit. No AutoUpdate, so a restart never happens on its own.
+Image=quay.io/keycloak/keycloak:26.2
+Network=host
+
+# Realm files in data/import are created when the realm does not exist yet
+# and are left alone afterwards.
+Exec=start --import-realm
+
+EnvironmentFile=%h/.config/model-orchestrator/keycloak.env
+
+# Loopback only, plain HTTP: with host networking nobody but the TLS proxy
+# and the admin website on this host may reach these ports.
+Environment=KC_HTTP_ENABLED=true
+Environment=KC_HTTP_HOST=127.0.0.1
+Environment=KC_HTTP_PORT=8601
+# Client address and scheme come from nginx.
+Environment=KC_PROXY_HEADERS=xforwarded
+# One instance: no cluster, so no cluster ports are opened.
+Environment=KC_CACHE=local
+Environment=KC_DB=postgres
+
+Volume=%h/.config/model-orchestrator/keycloak/import:/opt/keycloak/data/import:ro,z
+
+# The image has neither curl nor wget; bash can open the socket itself.
+# Keycloak opens its port only when the start is complete (database migrated,
+# realm files read). Health and metrics endpoints are left off, so no
+# management port (9000) is opened either.
+HealthCmd=/bin/bash -c "exec 3<>/dev/tcp/127.0.0.1/8601"
+HealthInterval=30s
+HealthTimeout=5s
+HealthStartPeriod=120s
+HealthRetries=3
+
+[Service]
+Restart=on-failure
+RestartSec=10
+# The first start builds the server and creates the database tables.
+TimeoutStartSec=300
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target
