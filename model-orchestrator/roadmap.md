@@ -6,15 +6,16 @@ below refer to it. The admin website's decisions are in `docs/superpowers/specs/
 
 ## Where things stand
 
-- **Version 3 of the router is complete in the repository and not yet released.** It is the package
+- **Version 3 of the router is merged to `main` (2026-11-19) and not yet released.** It is the package
   `model_orchestrator/`, with unit tests, an end-to-end contract suite and a CI pipeline that gates
-  publishing. `pyproject.toml` says `3.0.0.dev0`.
-- **Production still runs 2.x** at both sites. Two kinds of site exist, and the plan below treats them
-  differently:
+  publishing. `pyproject.toml` says `3.0.0`; the first build of `main` was `sha-8464a9e`.
+- Two kinds of site exist, and the plan below treats them differently:
   - *Site A*: one GPU host, rootless Podman with systemd units, updates itself from the `latest` tag.
-  - *Site B*: Kubernetes, image tags pinned in git. This is the pilot site.
-- **The admin website (`admin_web/`) is built and tested, and not yet deployed.** The Streamlit page
-  (`admin_ui/`) is what the sites use today.
+    **Still runs 2.x.**
+  - *Site B*: Kubernetes, image tags pinned in git. The pilot site: **runs version 3 (`sha-8464a9e`)
+    and the admin website with single sign-on since 2026-11-19.**
+- **The admin website (`admin_web/`) replaced the Streamlit page at site B.** Site A still uses the
+  Streamlit page (`admin_ui/`).
 - **The 2.x router (`main.py`, `store.py`) is still in the repository**, only so that the contract suite
   can run against it (`ROUTER_TARGET=legacy`). The image no longer contains it.
 
@@ -39,6 +40,9 @@ below refer to it. The admin website's decisions are in `docs/superpowers/specs/
 No step replaces a running router in one go, and no step needs both sites to change at the same time.
 
 ### 1. Pilot at site B, by `sha-` pin
+
+**Status 2026-11-19:** steps 1 to 4 done (merged, `check-config` passed, `sha-8464a9e` pinned, smoke
+test passed for every route). Step 5, watching for a few days, is running.
 
 1. Merge to `main`. CI publishes `sha-<short>`; `latest` does not move, so site A is not touched.
 2. Run `check-config` from that image on site B's live config.
@@ -87,6 +91,9 @@ Today site B keeps a copy of site A's route list, synced by hand. With both site
 4. Run the smoke script against site B.
 
 ### 4. Roll out the admin website
+
+**Status 2026-11-19:** done at site B, with single sign-on from the start and the old Streamlit login as
+the local break-glass account. Site A follows after its router upgrade.
 
 1. Deploy `admin_web` next to the Streamlit page (`deployment/admin-web.container`, or
    `deployment/kubernetes/admin-web.yaml`), first with the local account.
