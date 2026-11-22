@@ -6,16 +6,17 @@ below refer to it. The admin website's decisions are in `docs/superpowers/specs/
 
 ## Where things stand
 
-- **Version 3 of the router is merged to `main` (2026-11-19) and not yet released.** It is the package
-  `model_orchestrator/`, with unit tests, an end-to-end contract suite and a CI pipeline that gates
-  publishing. `pyproject.toml` says `3.0.0`; the first build of `main` was `sha-8464a9e`.
+- **Version 3 of the router is released: `3.0.0` on 2026-11-22** (tag `model-orchestrator-v3.0.0`). It is
+  the package `model_orchestrator/`, with unit tests, an end-to-end contract suite and a CI pipeline that
+  gates publishing. The admin website is released as `0.1.0` (tag `model-orchestrator-admin-web-v0.1.0`).
 - Two kinds of site exist, and the plan below treats them differently:
   - *Site A*: one GPU host, rootless Podman with systemd units, updates itself from the `latest` tag.
-    **Still runs 2.x.**
+    **Runs 3.0.0 since the release day.**
   - *Site B*: Kubernetes, image tags pinned in git. The pilot site: **runs version 3 (`sha-8464a9e`)
     and the admin website with single sign-on since 2026-11-19.**
-- **The admin website (`admin_web/`) replaced the Streamlit page at site B.** Site A still uses the
-  Streamlit page (`admin_ui/`).
+- **The admin website (`admin_web/`) replaced the Streamlit page at both sites** (site B 2026-11-19,
+  site A 2026-11-22). Site A signs in through a Keycloak of its own next to the router
+  (`deployment/keycloak.container`).
 - **The 2.x router (`main.py`, `store.py`) is still in the repository**, only so that the contract suite
   can run against it (`ROUTER_TARGET=legacy`). The image no longer contains it.
 
@@ -57,14 +58,19 @@ health gating taking a working backend offline.
 
 ### 2. Release 3.0.0, which upgrades site A
 
+**Status 2026-11-22:** done. The tag was cut and site A was upgraded by hand right after CI had published
+(`podman pull`, restart; the API was away for about 7 seconds). Port 9095 turned out to be taken on that
+host, so `ROUTER_METRICS_PORT` was set before the upgrade. The database was dumped first; the five
+migrations ran at start. `scripts/smoke.py` was not run against site A.
+
 Site A follows `latest`, so the release is its upgrade. Before the tag:
 
-- [ ] Site A's live config passes `check-config` with the release candidate image.
-- [ ] Every probed backend at site A reports healthy on the running router. A `health_path` that fails
+- [x] Site A's live config passes `check-config` with the release candidate image.
+- [x] Every probed backend at site A reports healthy on the running router. A `health_path` that fails
       today would take its model offline under version 3: fix the path, or set it to `null`.
-- [ ] Nothing at site A scrapes `GET /metrics` on the API port or parses the old `/health`.
-- [ ] Port 9095 is free on the host and not published.
-- [ ] Any change freeze at site A is over.
+- [ ] Nothing at site A scrapes `GET /metrics` on the API port or parses the old `/health`. (Not checked.)
+- [x] Port 9095 is free on the host and not published. (It was taken: another port was configured.)
+- [x] Any change freeze at site A is over. (Lifted by the operator.)
 
 Then:
 
@@ -93,7 +99,11 @@ Today site B keeps a copy of site A's route list, synced by hand. With both site
 ### 4. Roll out the admin website
 
 **Status 2026-11-19:** done at site B, with single sign-on from the start and the old Streamlit login as
-the local break-glass account. Site A follows after its router upgrade.
+the local break-glass account.
+
+**Status 2026-11-22:** done at site A the same way, on the evening of its router upgrade. Site A had no
+identity provider, so a Keycloak runs next to the router there (README, "Keycloak next to the router").
+The Streamlit unit is stopped and removed at site A.
 
 1. Deploy `admin_web` next to the Streamlit page (`deployment/admin-web.container`, or
    `deployment/kubernetes/admin-web.yaml`), first with the local account.
